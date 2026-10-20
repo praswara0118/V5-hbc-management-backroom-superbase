@@ -814,8 +814,24 @@ export const DatabaseManagementView: React.FC<DatabaseManagementViewProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-2 w-full md:w-auto justify-end">
+        <div className="flex items-center gap-2 w-full md:w-auto justify-end flex-wrap">
+          {onRefreshConnection && (
+            <button
+              type="button"
+              onClick={async () => {
+                if (showAlert) showAlert('🔄 Menyinkronkan seluruh data dari Supabase (termasuk >1.000 data)...');
+                await onRefreshConnection();
+              }}
+              className="px-3.5 py-2 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 hover:text-white rounded-xl text-xs font-medium border border-neutral-700 flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Tarik ulang seluruh data secara lengkap dari Supabase"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Muat Ulang Data Cloud</span>
+            </button>
+          )}
+
           <button
+            type="button"
             onClick={handleStartCreate}
             className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
           >
@@ -824,6 +840,7 @@ export const DatabaseManagementView: React.FC<DatabaseManagementViewProps> = ({
           </button>
 
           <button
+            type="button"
             onClick={handleLockDatabase}
             className="px-3.5 py-2 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 hover:text-white rounded-xl text-xs font-medium border border-neutral-700 flex items-center gap-1.5 transition-colors cursor-pointer"
             title="Kunci kembali halaman database"

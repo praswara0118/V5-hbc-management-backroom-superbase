@@ -258,6 +258,79 @@ export async function seedInitialSupabaseData(): Promise<void> {
 // REALTIME SUBSCRIPTIONS (MULTI-DEVICE SYNCHRONIZATION)
 // =========================================================================
 
+// =========================================================================
+// PAGINATED BATCH FETCHING (BYPASS POSTGREST 1,000 ROW DEFAULT LIMIT)
+// =========================================================================
+
+/**
+ * Helper to fetch ALL rows from a Supabase table by paginating with .range(from, to)
+ * in batches of 1,000 rows.
+ *
+ * Mengapa ini mutlak diperlukan?
+ * Supabase PostgREST secara bawaan (default) membatasi respons query `.select('*')`
+ * maksimal 1.000 baris (PGRST_MAX_ROWS = 1000). Jika tabel di Supabase memiliki
+ * lebih dari 1.000 data (misalnya 2.000, 5.000, atau puluhan ribu produk), pemanggilan
+ * tunggal `.select('*')` hanya akan mengembalikan 1.000 data teratas.
+ *
+ * Fungsi ini mengunduh data secara berkelanjutan dalam potongan 1.000 baris
+ * (0–999, 1000–1999, 2000–2999, dst.) hingga seluruh data 100% lengkap.
+ */
+export async function fetchAllRowsFromSupabase<T = any>(
+  client: any,
+  table: string,
+  options?: {
+    orderColumn?: string;
+    ascending?: boolean;
+    batchSize?: number;
+    select?: string;
+    onBatch?: (batchData: T[], cumulativeCount: number) => void;
+  }
+): Promise<T[]> {
+  const batchSize = options?.batchSize || 1000;
+  const orderCol = options?.orderColumn;
+  const ascending = options?.ascending ?? true;
+  const selectQuery = options?.select || '*';
+
+  let allRows: T[] = [];
+  let from = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const to = from + batchSize - 1;
+    let query = client.from(table).select(selectQuery).range(from, to);
+
+    if (orderCol) {
+      query = query.order(orderCol, { ascending });
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      console.error(`Error fetching batch from table ${table} [${from}-${to}]:`, error);
+      throw error;
+    }
+
+    if (!data || data.length === 0) {
+      hasMore = false;
+    } else {
+      allRows = allRows.concat(data as T[]);
+      if (options?.onBatch) {
+        options.onBatch(data as T[], allRows.length);
+      }
+      if (data.length < batchSize) {
+        hasMore = false;
+      } else {
+        from += batchSize;
+      }
+    }
+  }
+
+  return allRows;
+}
+
+// =========================================================================
+// REALTIME SUBSCRIPTIONS (MULTI-DEVICE SYNCHRONIZATION)
+// =========================================================================
+
 export function subscribeToReturnItems(
   onUpdate: (items: ReturnItem[]) => void,
   onError?: (error: Error) => void
@@ -268,17 +341,23 @@ export function subscribeToReturnItems(
   }
 
   let active = true;
+  let debounceTimer: any = null;
 
   const fetchItems = async () => {
     try {
-      const { data, error } = await client
-        .from('return_items')
-        .select('*')
-        .order('created_at', { ascending: false });
+      const allRows = await fetchAllRowsFromSupabase<any>(client, 'return_items', {
+        orderColumn: 'created_at',
+        ascending: false,
+        batchSize: 1000,
+        onBatch: (chunk, count) => {
+          if (active && count === chunk.length && chunk.length > 0) {
+            onUpdate(chunk.map(supabaseToReturnItem));
+          }
+        },
+      });
 
-      if (error) throw error;
-      if (active && data) {
-        const mapped = data.map(supabaseToReturnItem);
+      if (active) {
+        const mapped = allRows.map(supabaseToReturnItem);
         onUpdate(mapped);
       }
     } catch (err: any) {
@@ -295,13 +374,17 @@ export function subscribeToReturnItems(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'return_items' },
       () => {
-        fetchItems();
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          fetchItems();
+        }, 300);
       }
     )
     .subscribe();
 
   return () => {
     active = false;
+    if (debounceTimer) clearTimeout(debounceTimer);
     client.removeChannel(channel);
   };
 }
@@ -316,17 +399,23 @@ export function subscribeToSuppliers(
   }
 
   let active = true;
+  let debounceTimer: any = null;
 
   const fetchSuppliers = async () => {
     try {
-      const { data, error } = await client
-        .from('suppliers')
-        .select('*')
-        .order('name', { ascending: true });
+      const allRows = await fetchAllRowsFromSupabase<any>(client, 'suppliers', {
+        orderColumn: 'name',
+        ascending: true,
+        batchSize: 1000,
+        onBatch: (chunk, count) => {
+          if (active && count === chunk.length && chunk.length > 0) {
+            onUpdate(chunk.map(supabaseToSupplier));
+          }
+        },
+      });
 
-      if (error) throw error;
-      if (active && data) {
-        const mapped = data.map(supabaseToSupplier);
+      if (active) {
+        const mapped = allRows.map(supabaseToSupplier);
         onUpdate(mapped);
       }
     } catch (err: any) {
@@ -343,13 +432,17 @@ export function subscribeToSuppliers(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'suppliers' },
       () => {
-        fetchSuppliers();
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          fetchSuppliers();
+        }, 300);
       }
     )
     .subscribe();
 
   return () => {
     active = false;
+    if (debounceTimer) clearTimeout(debounceTimer);
     client.removeChannel(channel);
   };
 }
@@ -364,17 +457,24 @@ export function subscribeToMasterProducts(
   }
 
   let active = true;
+  let debounceTimer: any = null;
 
   const fetchProducts = async () => {
     try {
-      const { data, error } = await client
-        .from('master_products')
-        .select('*')
-        .order('item_name', { ascending: true });
+      const allRows = await fetchAllRowsFromSupabase<any>(client, 'master_products', {
+        orderColumn: 'item_name',
+        ascending: true,
+        batchSize: 1000,
+        onBatch: (chunk, count) => {
+          // Immediately display the first 1000 items while subsequent batches continue loading
+          if (active && count === chunk.length && chunk.length > 0) {
+            onUpdate(chunk.map(supabaseToMasterProduct));
+          }
+        },
+      });
 
-      if (error) throw error;
-      if (active && data) {
-        const mapped = data.map(supabaseToMasterProduct);
+      if (active) {
+        const mapped = allRows.map(supabaseToMasterProduct);
         onUpdate(mapped);
       }
     } catch (err: any) {
@@ -392,13 +492,17 @@ export function subscribeToMasterProducts(
       { event: '*', schema: 'public', table: 'master_products' },
       () => {
         invalidateMasterProductCache();
-        fetchProducts();
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          fetchProducts();
+        }, 300);
       }
     )
     .subscribe();
 
   return () => {
     active = false;
+    if (debounceTimer) clearTimeout(debounceTimer);
     client.removeChannel(channel);
   };
 }
@@ -413,17 +517,23 @@ export function subscribeToStorageLocations(
   }
 
   let active = true;
+  let debounceTimer: any = null;
 
   const fetchLocations = async () => {
     try {
-      const { data, error } = await client
-        .from('storage_locations')
-        .select('*')
-        .order('updated_at', { ascending: false });
+      const allRows = await fetchAllRowsFromSupabase<any>(client, 'storage_locations', {
+        orderColumn: 'updated_at',
+        ascending: false,
+        batchSize: 1000,
+        onBatch: (chunk, count) => {
+          if (active && count === chunk.length && chunk.length > 0) {
+            onUpdate(chunk.map(supabaseToStorageLocation));
+          }
+        },
+      });
 
-      if (error) throw error;
-      if (active && data) {
-        const mapped = data.map(supabaseToStorageLocation);
+      if (active) {
+        const mapped = allRows.map(supabaseToStorageLocation);
         onUpdate(mapped);
       }
     } catch (err: any) {
@@ -441,13 +551,17 @@ export function subscribeToStorageLocations(
       { event: '*', schema: 'public', table: 'storage_locations' },
       () => {
         invalidateStorageLocationCache();
-        fetchLocations();
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          fetchLocations();
+        }, 300);
       }
     )
     .subscribe();
 
   return () => {
     active = false;
+    if (debounceTimer) clearTimeout(debounceTimer);
     client.removeChannel(channel);
   };
 }
@@ -846,17 +960,25 @@ export async function migrateCurrentDataToSupabase(
     // 1. Suppliers
     if (onProgress) onProgress(`Memigrasikan ${data.suppliers.length} data supplier...`, 25);
     if (data.suppliers.length > 0) {
-      const payload = data.suppliers.map(supplierToSupabase);
-      const { error } = await client.from('suppliers').upsert(payload);
-      if (error) throw new Error(`Gagal memigrasikan supplier: ${error.message}`);
+      const CHUNK = 200;
+      for (let i = 0; i < data.suppliers.length; i += CHUNK) {
+        const chunk = data.suppliers.slice(i, i + CHUNK);
+        const payload = chunk.map(supplierToSupabase);
+        const { error } = await client.from('suppliers').upsert(payload);
+        if (error) throw new Error(`Gagal memigrasikan supplier: ${error.message}`);
+      }
     }
 
     // 2. Return Items
     if (onProgress) onProgress(`Memigrasikan ${data.items.length} data barang return...`, 50);
     if (data.items.length > 0) {
-      const payload = data.items.map(returnItemToSupabase);
-      const { error } = await client.from('return_items').upsert(payload);
-      if (error) throw new Error(`Gagal memigrasikan barang retur: ${error.message}`);
+      const CHUNK = 200;
+      for (let i = 0; i < data.items.length; i += CHUNK) {
+        const chunk = data.items.slice(i, i + CHUNK);
+        const payload = chunk.map(returnItemToSupabase);
+        const { error } = await client.from('return_items').upsert(payload);
+        if (error) throw new Error(`Gagal memigrasikan barang retur: ${error.message}`);
+      }
     }
 
     // 3. Master Products
