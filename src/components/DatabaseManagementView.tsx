@@ -1,10 +1,12 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { MasterProduct, ProcurementType, Supplier } from '../types/inventory';
+import { MasterProduct, ProcurementType, Supplier, ReturnItem, StorageLocation } from '../types/inventory';
 import {
   parseMasterProductsFromExcel,
   downloadMasterTemplateExcel,
 } from '../utils/excelService';
 import { SearchableSupplierSelect, SupplierOption } from './SearchableSupplierSelect';
+import { getSupabaseConfig, isSupabaseConfigured, testSupabaseConnection } from '../supabase';
+import { migrateCurrentDataToSupabase } from '../services/supabaseService';
 import {
   Lock,
   Unlock,
@@ -37,6 +39,11 @@ import {
   ChevronsRight,
   Filter,
   RotateCcw,
+  Server,
+  Copy,
+  Check,
+  ExternalLink,
+  Sliders,
 } from 'lucide-react';
 
 interface DatabaseManagementViewProps {
@@ -48,6 +55,12 @@ interface DatabaseManagementViewProps {
   onBatchDeleteMasterProducts: (productIds: string[]) => void;
   onClearAllMasterProducts: (idsToClear?: string[]) => void;
   onBackToReturnPage?: () => void;
+  returnItems?: ReturnItem[];
+  storageLocations?: StorageLocation[];
+  isCloudConnected?: boolean;
+  cloudProvider?: 'supabase' | 'firestore' | 'local';
+  onRefreshConnection?: () => Promise<void>;
+  showAlert?: (msg: string) => void;
 }
 
 const DATABASE_PASSWORD = 'HBCKWS1007';
@@ -61,6 +74,12 @@ export const DatabaseManagementView: React.FC<DatabaseManagementViewProps> = ({
   onBatchDeleteMasterProducts,
   onClearAllMasterProducts,
   onBackToReturnPage,
+  returnItems = [],
+  storageLocations = [],
+  isCloudConnected = false,
+  cloudProvider = 'local',
+  onRefreshConnection,
+  showAlert,
 }) => {
   // Authentication state
   const [isUnlocked, setIsUnlocked] = useState<boolean>(() => {
@@ -73,6 +92,89 @@ export const DatabaseManagementView: React.FC<DatabaseManagementViewProps> = ({
   const [passwordInput, setPasswordInput] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+
+  // Supabase migration & configuration state
+  const [supabaseUrlInput, setSupabaseUrlInput] = useState(() => getSupabaseConfig().url);
+  const [supabaseAnonKeyInput, setSupabaseAnonKeyInput] = useState(() => getSupabaseConfig().anonKey);
+  const [isTestingSupabase, setIsTestingSupabase] = useState(false);
+  const [supabaseTestResult, setSupabaseTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [isMigratingData, setIsMigratingData] = useState(false);
+  const [migrationProgress, setMigrationProgress] = useState<{ step: string; pct: number } | null>(null);
+  const [migrationResult, setMigrationResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [showSqlGuide, setShowSqlGuide] = useState(false);
+  const [copiedSql, setCopiedSql] = useState(false);
+  const [isConfigExpanded, setIsConfigExpanded] = useState(false);
+
+  // Simpan kredensial Supabase ke memori browser & segarkan koneksi
+  const handleSaveSupabaseConfig = async () => {
+    try {
+      localStorage.setItem('returku_supabase_url', supabaseUrlInput.trim());
+      localStorage.setItem('returku_supabase_anon_key', supabaseAnonKeyInput.trim());
+      if (showAlert) showAlert('Pengaturan Supabase disimpan. Menguji koneksi...');
+      if (onRefreshConnection) {
+        await onRefreshConnection();
+      }
+      const test = await testSupabaseConnection();
+      setSupabaseTestResult(test);
+      if (test.success && showAlert) {
+        showAlert('✓ ' + test.message);
+      }
+    } catch (err: any) {
+      setSupabaseTestResult({ success: false, message: err.message || 'Gagal menyimpan konfigurasi' });
+    }
+  };
+
+  const handleTestConnection = async () => {
+    setIsTestingSupabase(true);
+    try {
+      const res = await testSupabaseConnection();
+      setSupabaseTestResult(res);
+      if (showAlert) showAlert(res.message);
+    } catch (err: any) {
+      setSupabaseTestResult({ success: false, message: err.message || 'Koneksi gagal' });
+    } finally {
+      setIsTestingSupabase(false);
+    }
+  };
+
+  const handleExecuteMigration = async () => {
+    if (!isSupabaseConfigured() && !supabaseUrlInput.trim()) {
+      alert('Harap simpan URL dan Anon Key Supabase terlebih dahulu.');
+      return;
+    }
+    const totalCount = suppliers.length + returnItems.length + masterProducts.length + storageLocations.length;
+    if (!confirm(`Mulai migrasikan ${totalCount} total data (Supplier, Retur, Master Produk, dan Lokasi Rak) ke Supabase?`)) {
+      return;
+    }
+
+    setIsMigratingData(true);
+    setMigrationResult(null);
+    setMigrationProgress({ step: 'Menyiapkan koneksi...', pct: 5 });
+
+    try {
+      const result = await migrateCurrentDataToSupabase(
+        {
+          items: returnItems,
+          suppliers,
+          masterProducts,
+          storageLocations,
+        },
+        (step, pct) => {
+          setMigrationProgress({ step, pct });
+        }
+      );
+
+      setMigrationResult(result);
+      if (result.success) {
+        if (showAlert) showAlert('✓ Migrasi seluruh data ke Supabase berhasil!');
+        if (onRefreshConnection) await onRefreshConnection();
+      }
+    } catch (err: any) {
+      setMigrationResult({ success: false, message: `Migrasi gagal: ${err.message || String(err)}` });
+    } finally {
+      setIsMigratingData(false);
+    }
+  };
 
   // Table filters & search
   const [searchTerm, setSearchTerm] = useState('');
@@ -705,6 +807,270 @@ export const DatabaseManagementView: React.FC<DatabaseManagementViewProps> = ({
             </div>
           </div>
         </div>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* INTEGRASI & MIGRASI DATABASE SUPABASE (POSTGRESQL REALTIME) */}
+      {/* ========================================================================= */}
+      <div className="bg-white p-5 rounded-2xl border border-neutral-200 shadow-2xs space-y-4">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+              cloudProvider === 'supabase' && isCloudConnected
+                ? 'bg-emerald-100 text-emerald-700'
+                : 'bg-amber-100 text-amber-700'
+            }`}>
+              <Server className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-sm font-bold text-neutral-900">
+                  Database Utama: Supabase (PostgreSQL)
+                </h2>
+                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 ${
+                  cloudProvider === 'supabase' && isCloudConnected
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    : 'bg-amber-100 text-amber-800 border border-amber-300'
+                }`}>
+                  <span className={`w-2 h-2 rounded-full ${
+                    cloudProvider === 'supabase' && isCloudConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+                  }`} />
+                  {cloudProvider === 'supabase' && isCloudConnected
+                    ? 'PostgreSQL Realtime Terkoneksi'
+                    : 'Menunggu Konfigurasi Supabase'}
+                </span>
+              </div>
+              <p className="text-xs text-neutral-500 mt-0.5">
+                Sinkronisasi data multi-device, pelacakan retur, master produk, dan pemetaan rak dengan PostgreSQL &amp; Supabase Realtime.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 self-end sm:self-auto">
+            <button
+              type="button"
+              onClick={() => setIsConfigExpanded(!isConfigExpanded)}
+              className="px-3 py-1.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              <span>{isConfigExpanded ? 'Tutup Pengaturan' : 'Konfigurasi & Migrasi'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Collapsible Panel for Credentials, Testing, SQL Schema, and 1-Click Migration */}
+        {isConfigExpanded && (
+          <div className="pt-3 border-t border-neutral-100 space-y-4">
+            {/* Step 1: Credentials Input */}
+            <div className="bg-neutral-50 p-4 rounded-xl border border-neutral-200 space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-bold text-neutral-800 uppercase tracking-wider flex items-center gap-1.5">
+                  <Database className="w-3.5 h-3.5 text-neutral-600" />
+                  <span>Kredensial Proyek Supabase</span>
+                </h3>
+                <span className="text-[11px] text-neutral-500">
+                  Tersimpan aman di browser &amp; .env.example
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-semibold text-neutral-700 mb-1">
+                    Supabase Project URL (VITE_SUPABASE_URL)
+                  </label>
+                  <input
+                    type="url"
+                    placeholder="https://your-project-id.supabase.co"
+                    value={supabaseUrlInput}
+                    onChange={(e) => setSupabaseUrlInput(e.target.value)}
+                    className="w-full px-3 py-2 text-xs font-mono border border-neutral-300 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-neutral-900"
+                  />
+                  <span className="text-[10px] text-neutral-400 mt-0.5 block">
+                    Dapatkan di Supabase Dashboard → Settings → API
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-neutral-700 mb-1">
+                    Supabase Publishable Anon Key (VITE_SUPABASE_ANON_KEY)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                    value={supabaseAnonKeyInput}
+                    onChange={(e) => setSupabaseAnonKeyInput(e.target.value)}
+                    className="w-full px-3 py-2 text-xs font-mono border border-neutral-300 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-neutral-900"
+                  />
+                  <span className="text-[10px] text-neutral-400 mt-0.5 block">
+                    Gunakan anon key publik (bukan service_role secret key).
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handleSaveSupabaseConfig}
+                  className="px-3.5 py-1.5 bg-neutral-900 hover:bg-neutral-800 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Simpan Kredensial</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleTestConnection}
+                  disabled={isTestingSupabase}
+                  className="px-3.5 py-1.5 bg-white border border-neutral-300 hover:bg-neutral-100 text-neutral-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isTestingSupabase ? 'animate-spin' : ''}`} />
+                  <span>{isTestingSupabase ? 'Menguji...' : 'Uji Koneksi Supabase'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowSqlGuide(!showSqlGuide)}
+                  className="px-3.5 py-1.5 bg-blue-50 border border-blue-200 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>{showSqlGuide ? 'Sembunyikan Panduan SQL' : 'Lihat Skema SQL Supabase'}</span>
+                </button>
+              </div>
+
+              {supabaseTestResult && (
+                <div className={`p-3 rounded-lg text-xs flex items-start gap-2 ${
+                  supabaseTestResult.success
+                    ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+                    : 'bg-rose-50 border border-rose-200 text-rose-800'
+                }`}>
+                  {supabaseTestResult.success ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  )}
+                  <div>
+                    <div className="font-semibold">
+                      {supabaseTestResult.success ? 'Koneksi Berhasil' : 'Koneksi Terkendala'}
+                    </div>
+                    <div className="text-[11px] mt-0.5">{supabaseTestResult.message}</div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Step 2: SQL Guide Modal / Accordion */}
+            {showSqlGuide && (
+              <div className="p-4 bg-neutral-900 text-neutral-200 rounded-xl border border-neutral-700 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-emerald-400" />
+                    <span className="font-bold text-xs text-white uppercase tracking-wider">
+                      Langkah Pembuatan Tabel di Supabase SQL Editor
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(`-- File supabase-schema.sql di root repository`);
+                      setCopiedSql(true);
+                      setTimeout(() => setCopiedSql(false), 2500);
+                    }}
+                    className="px-2.5 py-1 bg-neutral-800 hover:bg-neutral-700 text-white rounded text-[11px] font-semibold flex items-center gap-1"
+                  >
+                    {copiedSql ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                    <span>{copiedSql ? 'Tersalin!' : 'Salin Lokasi File'}</span>
+                  </button>
+                </div>
+
+                <div className="text-xs text-neutral-300 leading-relaxed space-y-1.5 font-sans">
+                  <p>1. Buka dashboard proyek Supabase Anda di browser.</p>
+                  <p>2. Masuk ke menu <strong>SQL Editor</strong> di bilah navigasi kiri Supabase.</p>
+                  <p>3. Buka file <code>supabase-schema.sql</code> yang telah disediakan di root proyek ini, lalu salin dan jalankan seluruh isinya (Run SQL).</p>
+                  <p>4. Skrip ini akan membuat tabel <code>suppliers</code>, <code>master_products</code>, <code>return_items</code>, <code>storage_locations</code>, mengaktifkan RLS serta publikasi <code>supabase_realtime</code>.</p>
+                </div>
+              </div>
+            )}
+
+            {/* Step 3: 1-Click Migration Card */}
+            <div className="p-4 rounded-xl border border-emerald-200 bg-gradient-to-br from-emerald-50/50 to-white space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-xs font-bold text-emerald-950 uppercase tracking-wide flex items-center gap-1.5">
+                    <Upload className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Migrasi 1-Klik: Pindahkan Seluruh Data ke Supabase</span>
+                  </h3>
+                  <p className="text-xs text-neutral-600 mt-0.5">
+                    Mengunggah seluruh data supplier, barang return aktif/selesai, master produk XLSX, dan lokasi rak ke tabel PostgreSQL Supabase secara instan.
+                  </p>
+                </div>
+              </div>
+
+              {/* Data Summary Chips */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+                <div className="p-2 bg-white rounded-lg border border-neutral-200 shadow-2xs">
+                  <div className="text-[10px] text-neutral-500 font-semibold uppercase">Supplier</div>
+                  <div className="text-base font-bold font-mono text-neutral-900">{suppliers.length}</div>
+                </div>
+                <div className="p-2 bg-white rounded-lg border border-neutral-200 shadow-2xs">
+                  <div className="text-[10px] text-neutral-500 font-semibold uppercase">Barang Retur</div>
+                  <div className="text-base font-bold font-mono text-neutral-900">{returnItems.length}</div>
+                </div>
+                <div className="p-2 bg-white rounded-lg border border-neutral-200 shadow-2xs">
+                  <div className="text-[10px] text-neutral-500 font-semibold uppercase">Master Produk</div>
+                  <div className="text-base font-bold font-mono text-neutral-900">{masterProducts.length}</div>
+                </div>
+                <div className="p-2 bg-white rounded-lg border border-neutral-200 shadow-2xs">
+                  <div className="text-[10px] text-neutral-500 font-semibold uppercase">Lokasi Rak Simpan</div>
+                  <div className="text-base font-bold font-mono text-neutral-900">{storageLocations.length}</div>
+                </div>
+              </div>
+
+              {/* Live Migration Progress Bar */}
+              {isMigratingData && migrationProgress && (
+                <div className="space-y-1.5 p-3 bg-white rounded-lg border border-emerald-300">
+                  <div className="flex items-center justify-between text-xs font-semibold text-emerald-900">
+                    <span>{migrationProgress.step}</span>
+                    <span className="font-mono">{migrationProgress.pct}%</span>
+                  </div>
+                  <div className="w-full bg-neutral-200 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-emerald-600 h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${migrationProgress.pct}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Migration Result Alert */}
+              {migrationResult && (
+                <div className={`p-3 rounded-lg text-xs flex items-start gap-2 ${
+                  migrationResult.success
+                    ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+                    : 'bg-rose-50 border border-rose-200 text-rose-800'
+                }`}>
+                  {migrationResult.success ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  )}
+                  <div className="text-[11px] leading-relaxed">{migrationResult.message}</div>
+                </div>
+              )}
+
+              <div className="pt-1 flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={handleExecuteMigration}
+                  disabled={isMigratingData}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <Upload className={`w-4 h-4 ${isMigratingData ? 'animate-bounce' : ''}`} />
+                  <span>{isMigratingData ? 'Sedang Memproses Migrasi...' : 'Mulai Migrasikan Seluruh Data ke Supabase'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 2 JENIS JALUR IMPORT: CONSIGNMENT VS OUTRIGHT */}

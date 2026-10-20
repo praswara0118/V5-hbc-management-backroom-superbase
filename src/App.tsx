@@ -27,26 +27,23 @@ import { StorageLocationView } from './components/StorageLocationView';
 import { DatabaseManagementView } from './components/DatabaseManagementView';
 import { exportAllToExcel } from './utils/excelService';
 import {
-  subscribeToReturnItems,
-  subscribeToSuppliers,
-  subscribeToMasterProducts,
-  subscribeToStorageLocations,
-  saveReturnItemToFirestore,
-  deleteReturnItemFromFirestore,
-  batchDeleteReturnItemsFromFirestore,
-  saveSupplierToFirestore,
-  deleteSupplierFromFirestore,
-  batchDeleteSuppliersFromFirestore,
-  saveMasterProductToFirestore,
-  batchSaveMasterProductsToFirestore,
-  deleteMasterProductFromFirestore,
-  batchDeleteMasterProductsFromFirestore,
-  clearAllMasterProductsFromFirestore,
-  saveStorageLocationToFirestore,
-  deleteStorageLocationFromFirestore,
-  seedInitialFirestoreData,
-} from './services/firestoreService';
-import { testConnection } from './firebase';
+  initializeDatabaseSync,
+  saveReturnItem,
+  deleteReturnItem,
+  batchDeleteReturnItems,
+  saveSupplier,
+  deleteSupplier,
+  batchDeleteSuppliers,
+  saveMasterProduct,
+  batchSaveMasterProducts,
+  deleteMasterProduct,
+  batchDeleteMasterProducts,
+  clearAllMasterProducts,
+  saveStorageLocation,
+  deleteStorageLocation,
+  getActiveProvider,
+  DatabaseProvider,
+} from './services/databaseService';
 import {
   Camera,
   Plus,
@@ -164,7 +161,14 @@ export default function App() {
     return INITIAL_STORAGE_LOCATIONS;
   });
   const [isCloudConnected, setIsCloudConnected] = useState(false);
+  const [cloudProvider, setCloudProvider] = useState<DatabaseProvider>(getActiveProvider);
+  const [cloudStatusMessage, setCloudStatusMessage] = useState<string>('');
+  const [syncTrigger, setSyncTrigger] = useState(0);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  const handleRefreshConnection = async () => {
+    setSyncTrigger((prev) => prev + 1);
+  };
 
   // Monitor network online/offline state
   useEffect(() => {
@@ -180,72 +184,57 @@ export default function App() {
     };
   }, []);
 
-  // Initialize Firestore and real-time synchronization
+  // Initialize unified database synchronization (Supabase PostgreSQL Realtime with fallback)
   useEffect(() => {
-    let unsubscribeItems: (() => void) | undefined;
-    let unsubscribeSuppliers: (() => void) | undefined;
-    let unsubscribeMasterProducts: (() => void) | undefined;
-    let unsubscribeStorageLocations: (() => void) | undefined;
+    let unsubscribe: (() => void) | undefined;
 
-    const initFirebaseSync = async () => {
+    const runSync = async () => {
       try {
-        await testConnection();
-        await seedInitialFirestoreData();
-        setIsCloudConnected(true);
-
-        unsubscribeItems = subscribeToReturnItems(
-          (liveItems) => {
+        unsubscribe = await initializeDatabaseSync({
+          onItems: (liveItems) => {
             if (Array.isArray(liveItems)) {
               const unique = deduplicateItems(liveItems);
               setItems(unique);
-              localStorage.setItem(STORAGE_KEY_ITEMS, JSON.stringify(unique));
+              try {
+                localStorage.setItem(STORAGE_KEY_ITEMS, JSON.stringify(unique));
+              } catch {}
             }
           },
-          (err) => {
-            console.warn('Fallback to local storage due to Firestore stream error:', err);
-          }
-        );
-
-        unsubscribeSuppliers = subscribeToSuppliers(
-          (liveSuppliers) => {
+          onSuppliers: (liveSuppliers) => {
             if (Array.isArray(liveSuppliers)) {
               const unique = deduplicateSuppliers(liveSuppliers);
               setSuppliers(unique);
-              localStorage.setItem(STORAGE_KEY_SUPPLIERS, JSON.stringify(unique));
+              try {
+                localStorage.setItem(STORAGE_KEY_SUPPLIERS, JSON.stringify(unique));
+              } catch {}
             }
           },
-          (err) => {
-            console.warn('Fallback to local storage due to Firestore stream error:', err);
-          }
-        );
-
-        unsubscribeMasterProducts = subscribeToMasterProducts(
-          (liveProducts) => {
+          onMasterProducts: (liveProducts) => {
             if (Array.isArray(liveProducts)) {
               setMasterProducts(liveProducts);
-              localStorage.setItem(STORAGE_KEY_MASTER_PRODUCTS, JSON.stringify(liveProducts));
+              try {
+                localStorage.setItem(STORAGE_KEY_MASTER_PRODUCTS, JSON.stringify(liveProducts));
+              } catch {}
             }
           },
-          (err) => {
-            console.warn('Fallback to local storage due to master products stream error:', err);
-          }
-        );
-
-        unsubscribeStorageLocations = subscribeToStorageLocations(
-          (liveLocations) => {
+          onStorageLocations: (liveLocations) => {
             if (Array.isArray(liveLocations)) {
               setStorageLocations(liveLocations);
-              localStorage.setItem(STORAGE_KEY_STORAGE_LOCATIONS, JSON.stringify(liveLocations));
+              try {
+                localStorage.setItem(STORAGE_KEY_STORAGE_LOCATIONS, JSON.stringify(liveLocations));
+              } catch {}
             }
           },
-          (err) => {
-            console.warn('Fallback to local storage due to storage locations stream error:', err);
-          }
-        );
+          onConnectionChange: (connected, provider, message) => {
+            setIsCloudConnected(connected);
+            setCloudProvider(provider);
+            setCloudStatusMessage(message);
+          },
+        });
       } catch (err) {
-        console.warn('Using local storage fallback:', err);
+        console.warn('Database sync fallback to local storage:', err);
         setIsCloudConnected(false);
-        // Load local cache if any
+        setCloudProvider('local');
         try {
           const cachedItems = localStorage.getItem(STORAGE_KEY_ITEMS);
           if (cachedItems) setItems(JSON.parse(cachedItems));
@@ -255,21 +244,16 @@ export default function App() {
           if (cachedMaster) setMasterProducts(JSON.parse(cachedMaster));
           const cachedStorage = localStorage.getItem(STORAGE_KEY_STORAGE_LOCATIONS);
           if (cachedStorage) setStorageLocations(JSON.parse(cachedStorage));
-        } catch {
-          // ignore
-        }
+        } catch {}
       }
     };
 
-    initFirebaseSync();
+    runSync();
 
     return () => {
-      if (unsubscribeItems) unsubscribeItems();
-      if (unsubscribeSuppliers) unsubscribeSuppliers();
-      if (unsubscribeMasterProducts) unsubscribeMasterProducts();
-      if (unsubscribeStorageLocations) unsubscribeStorageLocations();
+      if (unsubscribe) unsubscribe();
     };
-  }, []);
+  }, [syncTrigger]);
 
   // Filtering & Search
   const [searchQuery, setSearchQuery] = useState('');
@@ -469,16 +453,16 @@ export default function App() {
     setSelectedSupplierFilter('ALL');
     setSearchQuery('');
 
-    // 3. Persist to Cloud Firestore in background
+    // 3. Persist to database in background
     try {
       if (newSupplier) {
-        await saveSupplierToFirestore(newSupplier);
+        await saveSupplier(newSupplier);
       }
       if (newMasterProduct) {
-        await saveMasterProductToFirestore(newMasterProduct);
+        await saveMasterProduct(newMasterProduct);
       }
-      await saveReturnItemToFirestore(itemToSave);
-      showAlert(`Barang return "${itemToSave.itemName}" berhasil disimpan dan tersinkron ke Cloud.`);
+      await saveReturnItem(itemToSave);
+      showAlert(`Barang return "${itemToSave.itemName}" berhasil disimpan dan tersinkron.`);
     } catch (err) {
       console.warn('Saved locally, will sync when connection permits:', err);
       showAlert(`Barang return "${itemToSave.itemName}" berhasil disimpan di memori perangkat.`);
@@ -497,8 +481,8 @@ export default function App() {
     });
 
     try {
-      await saveMasterProductToFirestore(productToSave);
-      showAlert(`Master produk "${productToSave.itemName}" berhasil disimpan & disinkronkan ke Cloud.`);
+      await saveMasterProduct(productToSave);
+      showAlert(`Master produk "${productToSave.itemName}" berhasil disimpan & disinkronkan.`);
     } catch (err) {
       console.warn('Master product saved locally:', err);
       showAlert(`Master produk "${productToSave.itemName}" disimpan di perangkat.`);
@@ -523,8 +507,8 @@ export default function App() {
     });
 
     try {
-      await batchSaveMasterProductsToFirestore(products);
-      showAlert(`Berhasil menyinkronkan ${products.length} master produk ke Cloud Firestore.`);
+      await batchSaveMasterProducts(products);
+      showAlert(`Berhasil menyinkronkan ${products.length} master produk ke database.`);
     } catch (err) {
       console.warn('Batch master products error:', err);
     }
@@ -541,7 +525,7 @@ export default function App() {
     });
 
     try {
-      await deleteMasterProductFromFirestore(productId);
+      await deleteMasterProduct(productId);
       showAlert('Master produk berhasil dihapus.');
     } catch (err) {
       console.warn('Error deleting master product:', err);
@@ -560,7 +544,7 @@ export default function App() {
     });
 
     try {
-      await batchDeleteMasterProductsFromFirestore(productIds);
+      await batchDeleteMasterProducts(productIds);
       showAlert(`✓ ${productIds.length} produk berhasil dihapus secara permanen.`);
     } catch (err) {
       console.warn('Error batch deleting master products:', err);
@@ -584,7 +568,7 @@ export default function App() {
     });
 
     try {
-      await clearAllMasterProductsFromFirestore(idsToClear);
+      await clearAllMasterProducts(idsToClear);
       showAlert('✓ Data master produk berhasil dikosongkan.');
     } catch (err) {
       console.warn('Error clearing master products:', err);
@@ -603,15 +587,15 @@ export default function App() {
     });
 
     try {
-      await saveStorageLocationToFirestore(locationToSave);
-      showAlert(`✓ Tempat penyimpanan "${locationToSave.itemName}" berhasil disimpan ke Cloud.`);
+      await saveStorageLocation(locationToSave);
+      showAlert(`✓ Tempat penyimpanan "${locationToSave.itemName}" berhasil disimpan.`);
     } catch (err) {
       console.warn('Storage location saved locally:', err);
       showAlert(`✓ Tempat penyimpanan "${locationToSave.itemName}" tersimpan di perangkat.`);
     }
   };
 
-  // Handler: Delete storage location -> Synced to Cloud Firestore
+  // Handler: Delete storage location -> Synced to database
   const handleDeleteStorageLocation = async (locationId: string) => {
     setStorageLocations((prev) => {
       const updated = prev.filter((l) => l.id !== locationId);
@@ -622,8 +606,8 @@ export default function App() {
     });
 
     try {
-      await deleteStorageLocationFromFirestore(locationId);
-      showAlert('Catatan lokasi penyimpanan berhasil dihapus dari Cloud.');
+      await deleteStorageLocation(locationId);
+      showAlert('Catatan lokasi penyimpanan berhasil dihapus.');
     } catch (err) {
       console.warn('Error deleting storage location:', err);
     }
@@ -676,17 +660,17 @@ export default function App() {
       return updated;
     });
 
-    // 3. Persist to Cloud Firestore
+    // 3. Persist to database
     try {
-      await saveSupplierToFirestore(supplierToSave);
-      showAlert(`Data supplier "${supplierToSave.name}" berhasil disimpan & tersinkron Cloud.`);
+      await saveSupplier(supplierToSave);
+      showAlert(`Data supplier "${supplierToSave.name}" berhasil disimpan & tersinkron.`);
     } catch (err) {
       console.error(err);
       showAlert(`Data supplier "${supplierToSave.name}" tersimpan di perangkat.`);
     }
   };
 
-  // Handler: Delete supplier -> Synced to Cloud Firestore & LocalStorage
+  // Handler: Delete supplier -> Synced to database & LocalStorage
   const handleDeleteSupplier = async (supplierId: string) => {
     const targetSup = suppliers.find((s) => s.id === supplierId);
     setSuppliers((prev) => {
@@ -702,7 +686,7 @@ export default function App() {
     }
 
     try {
-      await deleteSupplierFromFirestore(supplierId);
+      await deleteSupplier(supplierId);
       showAlert(`Supplier "${targetSup?.name || ''}" berhasil dihapus.`);
     } catch (err) {
       console.error(err);
@@ -710,17 +694,17 @@ export default function App() {
     }
   };
 
-  // Handler: Delete item -> Synced to Cloud Firestore
+  // Handler: Delete item -> Synced to database
   const handleDeleteItem = async (itemId: string) => {
     try {
-      await deleteReturnItemFromFirestore(itemId);
+      await deleteReturnItem(itemId);
       setItems((prev) => prev.filter((i) => i.id !== itemId));
       setSelectedReturnItemIds((prev) => {
         const next = new Set(prev);
         next.delete(itemId);
         return next;
       });
-      showAlert('Barang return berhasil dihapus dari Cloud.');
+      showAlert('Barang return berhasil dihapus.');
     } catch (err) {
       console.error(err);
     }
@@ -767,7 +751,7 @@ export default function App() {
         return updated;
       });
 
-      await batchDeleteReturnItemsFromFirestore(idsToDelete);
+      await batchDeleteReturnItems(idsToDelete);
       setSelectedReturnItemIds(new Set());
       setShowBatchDeleteReturnModal(false);
       showAlert(`✓ Berhasil menghapus ${count} barang return terpilih secara permanen.`);
@@ -794,15 +778,15 @@ export default function App() {
     });
 
     try {
-      await batchDeleteSuppliersFromFirestore(supplierIds);
-      showAlert(`✓ Berhasil menghapus ${count} data supplier terpilih dari Cloud.`);
+      await batchDeleteSuppliers(supplierIds);
+      showAlert(`✓ Berhasil menghapus ${count} data supplier terpilih.`);
     } catch (err) {
       console.error(err);
       showAlert(`Dihapus ${count} supplier dari perangkat.`);
     }
   };
 
-  // Handler: Mark item as picked up -> Synced to Cloud Firestore
+  // Handler: Mark item as picked up -> Synced to database
   const handleMarkAsPickedUp = async (itemId: string, pickedUpBy: string) => {
     const targetItem = items.find((i) => i.id === itemId);
     if (!targetItem) return;
@@ -816,15 +800,15 @@ export default function App() {
     };
 
     try {
-      await saveReturnItemToFirestore(updatedItem);
+      await saveReturnItem(updatedItem);
       setItems((prev) => prev.map((i) => (i.id === itemId ? updatedItem : i)));
-      showAlert('Status barang berhasil diperbarui di Cloud: Sudah Diambil.');
+      showAlert('Status barang berhasil diperbarui: Sudah Diambil.');
     } catch (err) {
       console.error(err);
     }
   };
 
-  // Handler: Log warning -> Synced to Cloud Firestore
+  // Handler: Log warning -> Synced to database
   const handleLogWarning = async (itemId: string, log: WarningLog) => {
     const targetItem = items.find((i) => i.id === itemId);
     if (!targetItem) return;
@@ -836,7 +820,7 @@ export default function App() {
     };
 
     try {
-      await saveReturnItemToFirestore(updatedItem);
+      await saveReturnItem(updatedItem);
       setItems((prev) => prev.map((i) => (i.id === itemId ? updatedItem : i)));
       showAlert(`Peringatan (${log.channel.toUpperCase()}) dicatat.`);
     } catch (err) {
@@ -1042,6 +1026,12 @@ export default function App() {
             onBatchDeleteMasterProducts={handleBatchDeleteMasterProducts}
             onClearAllMasterProducts={handleClearAllMasterProducts}
             onBackToReturnPage={() => setActiveAppMode('RETURN')}
+            returnItems={items}
+            storageLocations={storageLocations}
+            isCloudConnected={isCloudConnected}
+            cloudProvider={cloudProvider}
+            onRefreshConnection={handleRefreshConnection}
+            showAlert={showAlert}
           />
         </main>
       ) : (
@@ -1866,7 +1856,7 @@ export default function App() {
             HBC Backroom Management © 2026 — AEON Health &amp; Beauty Care Logistik Retur Gudang
           </div>
           <div className="flex items-center gap-4 text-[11px]">
-            <span>Database Master XLSX &amp; Cloud Firestore</span>
+            <span>Database Supabase (PostgreSQL) Realtime &amp; XLSX</span>
             <span>·</span>
             <span>Mendukung Kamera Foto &amp; Barcode EAN-13, Code 128</span>
             <span>·</span>

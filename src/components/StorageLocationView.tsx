@@ -9,7 +9,7 @@ import { BarcodeScannerModal } from './BarcodeScannerModal';
 import {
   getMasterProductByBarcode,
   getStorageLocationByBarcode,
-} from '../services/firestoreService';
+} from '../services/databaseService';
 import {
   Search,
   Camera,
