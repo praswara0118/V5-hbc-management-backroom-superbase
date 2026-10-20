@@ -44,6 +44,7 @@ import {
   getActiveProvider,
   DatabaseProvider,
 } from './services/databaseService';
+import { getCachedData, setCachedData } from './services/localCache';
 import {
   Camera,
   Plus,
@@ -184,6 +185,42 @@ export default function App() {
     };
   }, []);
 
+  // Muat data lengkap dari IndexedDB seketika (mengatasi limit 5MB localStorage)
+  useEffect(() => {
+    let isMounted = true;
+    const loadFastOfflineCache = async () => {
+      try {
+        const [cachedMaster, cachedItems, cachedSuppliers, cachedStorage] = await Promise.all([
+          getCachedData<MasterProduct[]>(STORAGE_KEY_MASTER_PRODUCTS),
+          getCachedData<ReturnItem[]>(STORAGE_KEY_ITEMS),
+          getCachedData<Supplier[]>(STORAGE_KEY_SUPPLIERS),
+          getCachedData<StorageLocation[]>(STORAGE_KEY_STORAGE_LOCATIONS),
+        ]);
+
+        if (!isMounted) return;
+
+        if (cachedMaster && Array.isArray(cachedMaster) && cachedMaster.length > 0) {
+          setMasterProducts(cachedMaster);
+        }
+        if (cachedItems && Array.isArray(cachedItems) && cachedItems.length > 0) {
+          setItems(cachedItems);
+        }
+        if (cachedSuppliers && Array.isArray(cachedSuppliers) && cachedSuppliers.length > 0) {
+          setSuppliers(cachedSuppliers);
+        }
+        if (cachedStorage && Array.isArray(cachedStorage) && cachedStorage.length > 0) {
+          setStorageLocations(cachedStorage);
+        }
+      } catch (err) {
+        console.warn('Fast offline cache read error:', err);
+      }
+    };
+    loadFastOfflineCache();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   // Initialize unified database synchronization (Supabase PostgreSQL Realtime with fallback)
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
@@ -195,34 +232,26 @@ export default function App() {
             if (Array.isArray(liveItems)) {
               const unique = deduplicateItems(liveItems);
               setItems(unique);
-              try {
-                localStorage.setItem(STORAGE_KEY_ITEMS, JSON.stringify(unique));
-              } catch {}
+              setCachedData(STORAGE_KEY_ITEMS, unique);
             }
           },
           onSuppliers: (liveSuppliers) => {
             if (Array.isArray(liveSuppliers)) {
               const unique = deduplicateSuppliers(liveSuppliers);
               setSuppliers(unique);
-              try {
-                localStorage.setItem(STORAGE_KEY_SUPPLIERS, JSON.stringify(unique));
-              } catch {}
+              setCachedData(STORAGE_KEY_SUPPLIERS, unique);
             }
           },
           onMasterProducts: (liveProducts) => {
             if (Array.isArray(liveProducts)) {
               setMasterProducts(liveProducts);
-              try {
-                localStorage.setItem(STORAGE_KEY_MASTER_PRODUCTS, JSON.stringify(liveProducts));
-              } catch {}
+              setCachedData(STORAGE_KEY_MASTER_PRODUCTS, liveProducts);
             }
           },
           onStorageLocations: (liveLocations) => {
             if (Array.isArray(liveLocations)) {
               setStorageLocations(liveLocations);
-              try {
-                localStorage.setItem(STORAGE_KEY_STORAGE_LOCATIONS, JSON.stringify(liveLocations));
-              } catch {}
+              setCachedData(STORAGE_KEY_STORAGE_LOCATIONS, liveLocations);
             }
           },
           onConnectionChange: (connected, provider, message) => {

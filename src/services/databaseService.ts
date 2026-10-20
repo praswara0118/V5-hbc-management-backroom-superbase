@@ -48,13 +48,16 @@ export async function initializeDatabaseSync(callbacks: {
         }
       }
 
-      await supabaseService.seedInitialSupabaseData();
       callbacks.onConnectionChange(true, 'supabase', 'Terkoneksi ke Supabase PostgreSQL Realtime');
 
+      // Mulai subscription paralel secara instan tanpa hambatan
       const unsubItems = supabaseService.subscribeToReturnItems(callbacks.onItems);
       const unsubSuppliers = supabaseService.subscribeToSuppliers(callbacks.onSuppliers);
       const unsubProducts = supabaseService.subscribeToMasterProducts(callbacks.onMasterProducts);
       const unsubLocations = supabaseService.subscribeToStorageLocations(callbacks.onStorageLocations);
+
+      // Cek seeding di latar belakang (background) tanpa menahan rendering awal
+      supabaseService.seedInitialSupabaseData().catch((e) => console.warn('Background seed check:', e));
 
       return () => {
         unsubItems();
