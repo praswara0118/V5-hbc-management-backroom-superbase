@@ -7,7 +7,7 @@ import {
 import { SearchableSupplierSelect, SupplierOption } from './SearchableSupplierSelect';
 import { getSupabaseConfig, isSupabaseConfigured, testSupabaseConnection } from '../supabase';
 import { migrateCurrentDataToSupabase } from '../services/supabaseService';
-import { SUPABASE_SCHEMA_SQL } from '../utils/supabaseSql';
+import { SUPABASE_SCHEMA_SQL, SUPABASE_GRANT_FIX_SQL } from '../utils/supabaseSql';
 import {
   Lock,
   Unlock,
@@ -45,6 +45,7 @@ import {
   Check,
   ExternalLink,
   Sliders,
+  Wrench,
 } from 'lucide-react';
 
 interface DatabaseManagementViewProps {
@@ -98,12 +99,19 @@ export const DatabaseManagementView: React.FC<DatabaseManagementViewProps> = ({
   const [supabaseUrlInput, setSupabaseUrlInput] = useState(() => getSupabaseConfig().url);
   const [supabaseAnonKeyInput, setSupabaseAnonKeyInput] = useState(() => getSupabaseConfig().anonKey);
   const [isTestingSupabase, setIsTestingSupabase] = useState(false);
-  const [supabaseTestResult, setSupabaseTestResult] = useState<{ success: boolean; message: string; tableReady?: boolean } | null>(null);
+  const [supabaseTestResult, setSupabaseTestResult] = useState<{
+    success: boolean;
+    message: string;
+    tableReady?: boolean;
+    permissionDenied?: boolean;
+  } | null>(null);
   const [isMigratingData, setIsMigratingData] = useState(false);
   const [migrationProgress, setMigrationProgress] = useState<{ step: string; pct: number } | null>(null);
   const [migrationResult, setMigrationResult] = useState<{ success: boolean; message: string } | null>(null);
   const [showSqlGuide, setShowSqlGuide] = useState(false);
+  const [selectedSqlTab, setSelectedSqlTab] = useState<'GRANT_FIX' | 'FULL_SCHEMA'>('GRANT_FIX');
   const [copiedSql, setCopiedSql] = useState(false);
+  const [copiedGrantSql, setCopiedGrantSql] = useState(false);
   const [isConfigExpanded, setIsConfigExpanded] = useState(false);
 
   // Simpan kredensial Supabase ke memori browser & segarkan koneksi
@@ -149,6 +157,17 @@ export const DatabaseManagementView: React.FC<DatabaseManagementViewProps> = ({
     }
   };
 
+  const handleCopyGrantSql = () => {
+    try {
+      navigator.clipboard.writeText(SUPABASE_GRANT_FIX_SQL);
+      setCopiedGrantSql(true);
+      if (showAlert) showAlert('✓ Skrip perbaikan hak akses GRANT (Error 42501) berhasil disalin!');
+      setTimeout(() => setCopiedGrantSql(false), 3000);
+    } catch {
+      alert('Gagal menyalin otomatis. Silakan pilih dan salin teks SQL dari kotak di bawah.');
+    }
+  };
+
   const handleDownloadSql = () => {
     try {
       const blob = new Blob([SUPABASE_SCHEMA_SQL], { type: 'text/sql' });
@@ -159,6 +178,21 @@ export const DatabaseManagementView: React.FC<DatabaseManagementViewProps> = ({
       a.click();
       URL.revokeObjectURL(url);
       if (showAlert) showAlert('✓ File supabase-schema.sql berhasil diunduh!');
+    } catch (err: any) {
+      alert('Gagal mengunduh file SQL: ' + err.message);
+    }
+  };
+
+  const handleDownloadGrantSql = () => {
+    try {
+      const blob = new Blob([SUPABASE_GRANT_FIX_SQL], { type: 'text/sql' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'supabase-grant-fix.sql';
+      a.click();
+      URL.revokeObjectURL(url);
+      if (showAlert) showAlert('✓ File supabase-grant-fix.sql berhasil diunduh!');
     } catch (err: any) {
       alert('Gagal mengunduh file SQL: ' + err.message);
     }
@@ -977,75 +1011,205 @@ export const DatabaseManagementView: React.FC<DatabaseManagementViewProps> = ({
               </div>
 
               {supabaseTestResult && (
-                <div className={`p-3.5 rounded-lg text-xs flex items-start gap-2.5 ${
+                <div className={`p-4 rounded-xl text-xs space-y-3 ${
                   supabaseTestResult.success
                     ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+                    : supabaseTestResult.permissionDenied || supabaseTestResult.message.includes('42501')
+                    ? 'bg-amber-50 border-2 border-amber-300 text-amber-950'
                     : 'bg-rose-50 border border-rose-200 text-rose-800'
                 }`}>
-                  {supabaseTestResult.success ? (
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                  ) : (
-                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                  )}
-                  <div className="flex-1">
-                    <div className="font-semibold text-xs">
-                      {supabaseTestResult.success ? 'Koneksi Berhasil' : 'Koneksi Terkendala'}
-                    </div>
-                    <div className="text-[11px] mt-0.5 leading-relaxed">{supabaseTestResult.message}</div>
-                    {supabaseTestResult.tableReady === false && (
-                      <button
-                        type="button"
-                        onClick={() => setShowSqlGuide(true)}
-                        className="mt-2.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
-                      >
-                        <FileText className="w-3.5 h-3.5" />
-                        <span>Buka &amp; Salin Skrip SQL Skema Sekarang</span>
-                      </button>
+                  <div className="flex items-start gap-2.5">
+                    {supabaseTestResult.success ? (
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                    ) : supabaseTestResult.permissionDenied || supabaseTestResult.message.includes('42501') ? (
+                      <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
                     )}
+                    <div className="flex-1">
+                      <div className="font-bold text-sm">
+                        {supabaseTestResult.success
+                          ? 'Koneksi Supabase Berhasil'
+                          : supabaseTestResult.permissionDenied || supabaseTestResult.message.includes('42501')
+                          ? 'Izin Akses PostgreSQL Ditolak (Error 42501: Permission Denied)'
+                          : 'Koneksi Supabase Terkendala'}
+                      </div>
+                      <div className="text-xs mt-1 leading-relaxed">{supabaseTestResult.message}</div>
+                    </div>
                   </div>
+
+                  {/* Solusi Khusus Error 42501 Permission Denied */}
+                  {(supabaseTestResult.permissionDenied || supabaseTestResult.message.includes('42501')) && (
+                    <div className="bg-white/80 p-3.5 rounded-lg border border-amber-200 space-y-2.5">
+                      <div className="font-bold text-xs text-amber-900 flex items-center gap-1.5">
+                        <Wrench className="w-4 h-4 text-amber-700" />
+                        <span>Cara Mengatasi Error 42501 Hanya dalam 3 Langkah:</span>
+                      </div>
+                      <ol className="list-decimal list-inside text-[11px] text-amber-950 space-y-1">
+                        <li>
+                          Klik tombol <strong className="text-amber-900 font-bold">"Salin Skrip Perbaikan Hak Akses"</strong> di bawah.
+                        </li>
+                        <li>
+                          Buka{' '}
+                          <a
+                            href="https://supabase.com/dashboard"
+                            target="_blank"
+                            rel="noreferrer"
+                            className="font-bold underline text-amber-900 inline-flex items-center gap-0.5"
+                          >
+                            Supabase Dashboard → SQL Editor <ExternalLink className="w-3 h-3 inline" />
+                          </a>
+                          , klik <strong>New query</strong>, lalu tempel (Ctrl+V) dan klik <strong>Run</strong>.
+                        </li>
+                        <li>
+                          Setelah query selesai di Supabase, kembali ke sini dan klik <strong className="text-amber-900">"Uji Ulang Koneksi"</strong>.
+                        </li>
+                      </ol>
+
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleCopyGrantSql();
+                            setShowSqlGuide(true);
+                            setSelectedSqlTab('GRANT_FIX');
+                          }}
+                          className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+                        >
+                          {copiedGrantSql ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                          <span>{copiedGrantSql ? '✓ Skrip GRANT Tersalin!' : 'Salin Skrip Perbaikan Hak Akses (1-Klik)'}</span>
+                        </button>
+
+                        <a
+                          href="https://supabase.com/dashboard"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="px-3.5 py-2 bg-neutral-900 hover:bg-neutral-800 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <span>Buka Supabase SQL Editor</span>
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </a>
+
+                        <button
+                          type="button"
+                          onClick={handleTestConnection}
+                          disabled={isTestingSupabase}
+                          className="px-3 py-2 bg-white border border-neutral-300 hover:bg-neutral-100 text-neutral-800 rounded-lg text-xs font-semibold inline-flex items-center gap-1 cursor-pointer"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${isTestingSupabase ? 'animate-spin' : ''}`} />
+                          <span>Uji Ulang Koneksi</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Tombol buka skema jika tabel belum ada */}
+                  {supabaseTestResult.tableReady === false && !supabaseTestResult.permissionDenied && !supabaseTestResult.message.includes('42501') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowSqlGuide(true);
+                        setSelectedSqlTab('FULL_SCHEMA');
+                      }}
+                      className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+                    >
+                      <FileText className="w-3.5 h-3.5" />
+                      <span>Buka &amp; Salin Skrip Skema SQL Sekarang</span>
+                    </button>
+                  )}
                 </div>
               )}
             </div>
 
-            {/* Step 2: SQL Guide Modal / Accordion */}
+            {/* Step 2: SQL Guide Modal / Accordion with Tab Support */}
             {showSqlGuide && (
               <div className="p-4 bg-neutral-900 text-neutral-200 rounded-xl border border-neutral-700 space-y-3.5 animate-in fade-in">
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-neutral-800 pb-2.5">
+                {/* Tab selector */}
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-neutral-800 pb-3">
                   <div className="flex items-center gap-2">
-                    <FileText className="w-4 h-4 text-emerald-400" />
-                    <span className="font-bold text-xs text-white uppercase tracking-wider">
-                      Skema PostgreSQL Supabase (supabase-schema.sql)
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 flex-wrap">
                     <button
                       type="button"
-                      onClick={handleCopySql}
-                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs"
+                      onClick={() => setSelectedSqlTab('GRANT_FIX')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                        selectedSqlTab === 'GRANT_FIX'
+                          ? 'bg-amber-500 text-neutral-950 shadow-xs'
+                          : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'
+                      }`}
                     >
-                      {copiedSql ? <Check className="w-3.5 h-3.5 text-white" /> : <Copy className="w-3.5 h-3.5" />}
-                      <span>{copiedSql ? '✓ Skrip SQL Tersalin!' : 'Salin Seluruh Skrip SQL (1-Klik)'}</span>
+                      <Wrench className="w-3.5 h-3.5" />
+                      <span>1. Perbaikan Izin (Fix Error 42501)</span>
                     </button>
 
                     <button
                       type="button"
-                      onClick={handleDownloadSql}
-                      className="px-2.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 hover:text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 border border-neutral-700 cursor-pointer"
-                      title="Unduh file supabase-schema.sql ke perangkat"
+                      onClick={() => setSelectedSqlTab('FULL_SCHEMA')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                        selectedSqlTab === 'FULL_SCHEMA'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'
+                      }`}
                     >
-                      <Download className="w-3.5 h-3.5 text-blue-400" />
-                      <span>Unduh File .sql</span>
+                      <FileText className="w-3.5 h-3.5" />
+                      <span>2. Skema Lengkap (Full Schema)</span>
                     </button>
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {selectedSqlTab === 'GRANT_FIX' ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleCopyGrantSql}
+                          className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-neutral-950 rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs"
+                        >
+                          {copiedGrantSql ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                          <span>{copiedGrantSql ? '✓ Tersalin!' : 'Salin Skrip Perbaikan (1-Klik)'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={handleDownloadGrantSql}
+                          className="px-2.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 hover:text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 border border-neutral-700 cursor-pointer"
+                        >
+                          <Download className="w-3.5 h-3.5 text-amber-400" />
+                          <span>Unduh .sql</span>
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleCopySql}
+                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs"
+                        >
+                          {copiedSql ? <Check className="w-3.5 h-3.5 text-white" /> : <Copy className="w-3.5 h-3.5" />}
+                          <span>{copiedSql ? '✓ Tersalin!' : 'Salin Skema Lengkap'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={handleDownloadSql}
+                          className="px-2.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 hover:text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 border border-neutral-700 cursor-pointer"
+                        >
+                          <Download className="w-3.5 h-3.5 text-blue-400" />
+                          <span>Unduh .sql</span>
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
 
                 <div className="text-xs text-neutral-300 leading-relaxed space-y-2 font-sans bg-neutral-850 p-3 rounded-lg border border-neutral-800">
                   <div className="font-semibold text-emerald-400 flex items-center gap-1.5">
-                    <span>Petunjuk Cara Menjalankan di Supabase:</span>
+                    <span>
+                      {selectedSqlTab === 'GRANT_FIX'
+                        ? '⚡ Petunjuk Cepat Perbaikan Hak Akses (Fix Error 42501):'
+                        : '📄 Petunjuk Menjalankan Skema Lengkap Supabase:'}
+                    </span>
                   </div>
                   <ol className="list-decimal list-inside space-y-1 text-neutral-300 text-[11px]">
                     <li>
-                      Klik tombol hijau <strong className="text-white">"Salin Seluruh Skrip SQL"</strong> di atas.
+                      Klik tombol kuning/hijau <strong className="text-white">"Salin Skrip"</strong> di atas.
                     </li>
                     <li>
                       Buka dashboard proyek Supabase Anda:{' '}
@@ -1068,7 +1232,7 @@ export const DatabaseManagementView: React.FC<DatabaseManagementViewProps> = ({
                       Klik tombol hijau <strong className="text-white">Run</strong> (atau tekan <kbd className="font-mono bg-neutral-800 px-1 py-0.5 rounded text-[10px]">Ctrl + Enter</kbd>).
                     </li>
                     <li>
-                      Setelah selesai, kembali ke halaman ini dan klik tombol <strong className="text-emerald-400">"Uji Koneksi Supabase"</strong> atau <strong className="text-emerald-400">"Mulai Migrasikan Seluruh Data ke Supabase"</strong>!
+                      Setelah selesai, klik <strong className="text-emerald-400">"Uji Ulang Koneksi"</strong> di atas.
                     </li>
                   </ol>
                 </div>
@@ -1076,11 +1240,14 @@ export const DatabaseManagementView: React.FC<DatabaseManagementViewProps> = ({
                 {/* Scrollable SQL code viewer */}
                 <div>
                   <div className="flex items-center justify-between text-[10px] text-neutral-400 font-mono mb-1">
-                    <span>Pratinjau Kode SQL:</span>
-                    <span>Tabel: suppliers, master_products, return_items, storage_locations, system_metadata</span>
+                    <span>
+                      {selectedSqlTab === 'GRANT_FIX'
+                        ? 'Skrip: supabase-grant-fix.sql (GRANT ALL ON TABLE suppliers, master_products, etc)'
+                        : 'Skrip: supabase-schema.sql (Semua Tabel, Indeks, RLS, & Realtime)'}
+                    </span>
                   </div>
-                  <pre className="max-h-48 overflow-y-auto text-[10px] font-mono bg-neutral-950 p-3 rounded-lg border border-neutral-800 text-neutral-300 select-all leading-normal">
-                    {SUPABASE_SCHEMA_SQL}
+                  <pre className="max-h-52 overflow-y-auto text-[10px] font-mono bg-neutral-950 p-3 rounded-lg border border-neutral-800 text-neutral-300 select-all leading-normal">
+                    {selectedSqlTab === 'GRANT_FIX' ? SUPABASE_GRANT_FIX_SQL : SUPABASE_SCHEMA_SQL}
                   </pre>
                 </div>
               </div>

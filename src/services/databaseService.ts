@@ -29,8 +29,23 @@ export async function initializeDatabaseSync(callbacks: {
       const connTest = await testSupabaseConnection();
       if (!connTest.success) {
         callbacks.onConnectionChange(false, 'supabase', connTest.message);
-        console.warn('Supabase not ready yet:', connTest.message);
-        return () => {};
+        console.warn('Supabase not ready yet, falling back to Firestore/cache:', connTest.message);
+        
+        // Tetap pasang listener Firestore agar data operasional tidak kosong
+        try {
+          const unsubItems = firestoreService.subscribeToReturnItems(callbacks.onItems);
+          const unsubSuppliers = firestoreService.subscribeToSuppliers(callbacks.onSuppliers);
+          const unsubProducts = firestoreService.subscribeToMasterProducts(callbacks.onMasterProducts);
+          const unsubLocations = firestoreService.subscribeToStorageLocations(callbacks.onStorageLocations);
+          return () => {
+            unsubItems();
+            unsubSuppliers();
+            unsubProducts();
+            unsubLocations();
+          };
+        } catch {
+          return () => {};
+        }
       }
 
       await supabaseService.seedInitialSupabaseData();

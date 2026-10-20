@@ -1,6 +1,6 @@
 -- =============================================================================
 -- HBC BACKROOM MANAGEMENT © 2026 - SUPABASE (POSTGRESQL) SCHEMA MIGRATION
--- Jalankan seluruh script SQL ini di Supabase Dashboard -> SQL Editor
+-- Jalankan seluruh script SQL ini di Supabase Dashboard -> SQL Editor -> Run
 -- Script ini 100% IDEMPOTENT (aman dijalankan berulang kali tanpa error)
 -- =============================================================================
 
@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS master_products (
     supplier_phone TEXT DEFAULT '',
     supplier_email TEXT DEFAULT '',
     unit TEXT DEFAULT 'Pcs',
-    procurement_type TEXT NOT NULL DEFAULT 'OUTRIGHT', -- 'OUTRIGHT' | 'CONSIGNMENT'
+    procurement_type TEXT NOT NULL DEFAULT 'OUTRIGHT',
     notes TEXT DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
@@ -115,14 +115,31 @@ CREATE TABLE IF NOT EXISTS system_metadata (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
--- 7. ENABLE ROW LEVEL SECURITY (RLS)
+-- 7. GRANT PERMISSIONS (Wajib untuk role anon, authenticated, service_role)
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+
+GRANT ALL ON TABLE public.suppliers TO anon, authenticated, service_role;
+GRANT ALL ON TABLE public.master_products TO anon, authenticated, service_role;
+GRANT ALL ON TABLE public.return_items TO anon, authenticated, service_role;
+GRANT ALL ON TABLE public.storage_locations TO anon, authenticated, service_role;
+GRANT ALL ON TABLE public.system_metadata TO anon, authenticated, service_role;
+
+GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL ROUTINES IN SCHEMA public TO anon, authenticated, service_role;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO anon, authenticated, service_role;
+
+-- 8. ENABLE ROW LEVEL SECURITY (RLS)
 ALTER TABLE suppliers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE master_products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE return_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE storage_locations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE system_metadata ENABLE ROW LEVEL SECURITY;
 
--- 8. RLS POLICIES (Akses Terbuka untuk Operasional Tim Gudang/Backroom dengan Anon & Authenticated Key)
+-- 9. RLS POLICIES (Akses Terbuka untuk Operasional Tim Gudang/Backroom dengan Anon & Authenticated Key)
 DROP POLICY IF EXISTS "Allow all access to suppliers" ON suppliers;
 CREATE POLICY "Allow all access to suppliers" ON suppliers
     FOR ALL
@@ -158,7 +175,7 @@ CREATE POLICY "Allow all access to system_metadata" ON system_metadata
     USING (true)
     WITH CHECK (true);
 
--- 9. SUPABASE REALTIME CONFIGURATION (Idempotent: aman dijalankan berulang kali)
+-- 10. SUPABASE REALTIME CONFIGURATION (Idempotent: aman dijalankan berulang kali)
 DO $$
 BEGIN
   IF NOT EXISTS (

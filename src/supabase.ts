@@ -63,7 +63,12 @@ export const supabase = getSupabaseClient();
 /**
  * Test connectivity with Supabase by checking table or server health
  */
-export async function testSupabaseConnection(): Promise<{ success: boolean; message: string; tableReady?: boolean }> {
+export async function testSupabaseConnection(): Promise<{
+  success: boolean;
+  message: string;
+  tableReady?: boolean;
+  permissionDenied?: boolean;
+}> {
   const client = getSupabaseClient();
   if (!client) {
     return {
@@ -76,25 +81,49 @@ export async function testSupabaseConnection(): Promise<{ success: boolean; mess
   try {
     const { error } = await client.from('suppliers').select('id').limit(1);
     if (error) {
+      // Kode 42501: permission denied for table suppliers
+      const isPermissionDenied =
+        error.code === '42501' ||
+        (typeof error.message === 'string' && error.message.toLowerCase().includes('permission denied'));
+
+      if (isPermissionDenied) {
+        return {
+          success: false,
+          message:
+            'Koneksi Supabase terkendala: permission denied for table suppliers (42501). Role "anon" belum memiliki hak akses ke tabel database. Jalankan skrip perbaikan GRANT / RLS di Supabase SQL Editor.',
+          tableReady: false,
+          permissionDenied: true,
+        };
+      }
+
       // Kode 42P01: Table 'suppliers' does not exist yet in PostgreSQL schema
       if (error.code === '42P01') {
         return {
           success: false,
-          message: 'Kredensial Supabase terhubung! Namun tabel belum dibuat di PostgreSQL. Harap jalankan skrip SQL di Supabase SQL Editor terlebih dahulu.',
+          message:
+            'Kredensial Supabase terhubung! Namun tabel "suppliers" belum dibuat di PostgreSQL. Harap jalankan skrip SQL di Supabase SQL Editor terlebih dahulu.',
           tableReady: false,
         };
       }
-      if (error.message && (error.message.includes('Failed to fetch') || error.message.includes('NetworkError'))) {
+      if (
+        error.message &&
+        (error.message.includes('Failed to fetch') || error.message.includes('NetworkError'))
+      ) {
         return {
           success: false,
-          message: 'Gagal menghubungi server Supabase. Pastikan URL project benar (contoh: https://xxxx.supabase.co) dan koneksi internet stabil.',
+          message:
+            'Gagal menghubungi server Supabase. Pastikan URL project benar (contoh: https://xxxx.supabase.co) dan koneksi internet stabil.',
           tableReady: false,
         };
       }
-      if (error.message && (error.message.includes('Invalid API key') || error.message.includes('JWT') || error.code === 'PGRST301')) {
+      if (
+        error.message &&
+        (error.message.includes('Invalid API key') || error.message.includes('JWT') || error.code === 'PGRST301')
+      ) {
         return {
           success: false,
-          message: 'API Key Supabase salah atau kadaluarsa. Pastikan menyalin "anon / public" key dari Project Settings → API di dashboard Supabase.',
+          message:
+            'API Key Supabase salah atau kadaluarsa. Pastikan menyalin "anon / public" key dari Project Settings → API di dashboard Supabase.',
           tableReady: false,
         };
       }
