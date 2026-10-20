@@ -29,10 +29,12 @@ export async function initializeDatabaseSync(callbacks: {
       const connTest = await testSupabaseConnection();
       if (!connTest.success) {
         callbacks.onConnectionChange(false, 'supabase', connTest.message);
-      } else {
-        await supabaseService.seedInitialSupabaseData();
-        callbacks.onConnectionChange(true, 'supabase', 'Terkoneksi ke Supabase PostgreSQL Realtime');
+        console.warn('Supabase not ready yet:', connTest.message);
+        return () => {};
       }
+
+      await supabaseService.seedInitialSupabaseData();
+      callbacks.onConnectionChange(true, 'supabase', 'Terkoneksi ke Supabase PostgreSQL Realtime');
 
       const unsubItems = supabaseService.subscribeToReturnItems(callbacks.onItems);
       const unsubSuppliers = supabaseService.subscribeToSuppliers(callbacks.onSuppliers);

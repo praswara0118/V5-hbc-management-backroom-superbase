@@ -63,38 +63,58 @@ export const supabase = getSupabaseClient();
 /**
  * Test connectivity with Supabase by checking table or server health
  */
-export async function testSupabaseConnection(): Promise<{ success: boolean; message: string }> {
+export async function testSupabaseConnection(): Promise<{ success: boolean; message: string; tableReady?: boolean }> {
   const client = getSupabaseClient();
   if (!client) {
     return {
       success: false,
-      message: 'Supabase URL atau Anon Key belum dikonfigurasi di Environment atau Pengaturan.',
+      message: 'Supabase URL atau Anon Key belum diisi. Masukkan URL dan Anon Key terlebih dahulu.',
+      tableReady: false,
     };
   }
 
   try {
     const { error } = await client.from('suppliers').select('id').limit(1);
     if (error) {
-      // If table doesn't exist yet, but credentials are valid:
+      // Kode 42P01: Table 'suppliers' does not exist yet in PostgreSQL schema
       if (error.code === '42P01') {
         return {
-          success: true,
-          message: 'Terkoneksi ke Supabase! Namun tabel database belum dibuat. Silakan jalankan file SQL skema.',
+          success: false,
+          message: 'Kredensial Supabase terhubung! Namun tabel belum dibuat di PostgreSQL. Harap jalankan skrip SQL di Supabase SQL Editor terlebih dahulu.',
+          tableReady: false,
+        };
+      }
+      if (error.message && (error.message.includes('Failed to fetch') || error.message.includes('NetworkError'))) {
+        return {
+          success: false,
+          message: 'Gagal menghubungi server Supabase. Pastikan URL project benar (contoh: https://xxxx.supabase.co) dan koneksi internet stabil.',
+          tableReady: false,
+        };
+      }
+      if (error.message && (error.message.includes('Invalid API key') || error.message.includes('JWT') || error.code === 'PGRST301')) {
+        return {
+          success: false,
+          message: 'API Key Supabase salah atau kadaluarsa. Pastikan menyalin "anon / public" key dari Project Settings → API di dashboard Supabase.',
+          tableReady: false,
         };
       }
       return {
         success: false,
-        message: `Koneksi Supabase error: ${error.message} (Kode: ${error.code})`,
+        message: `Koneksi Supabase terkendala: ${error.message} (${error.code || 'UNKNOWN'})`,
+        tableReady: false,
       };
     }
     return {
       success: true,
-      message: 'Koneksi ke Supabase berhasil dan tabel siap digunakan!',
+      message: 'Koneksi ke Supabase berhasil! Seluruh tabel PostgreSQL dan Realtime siap digunakan.',
+      tableReady: true,
     };
   } catch (err: any) {
+    const msg = err?.message || String(err);
     return {
       success: false,
-      message: `Gagal menghubungi server Supabase: ${err.message || String(err)}`,
+      message: `Gagal menghubungi Supabase: ${msg}`,
+      tableReady: false,
     };
   }
 }

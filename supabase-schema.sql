@@ -1,6 +1,7 @@
 -- =============================================================================
 -- HBC BACKROOM MANAGEMENT © 2026 - SUPABASE (POSTGRESQL) SCHEMA MIGRATION
 -- Jalankan seluruh script SQL ini di Supabase Dashboard -> SQL Editor
+-- Script ini 100% IDEMPOTENT (aman dijalankan berulang kali tanpa error)
 -- =============================================================================
 
 -- 1. EXTENSIONS
@@ -9,7 +10,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- 2. TABEL SUPPLIERS (Daftar Pemasok / Distributor)
 CREATE TABLE IF NOT EXISTS suppliers (
     id TEXT PRIMARY KEY,
-    code TEXT NOT NULL,
+    code TEXT NOT NULL DEFAULT '',
     name TEXT NOT NULL,
     pic_name TEXT NOT NULL DEFAULT '',
     phone TEXT NOT NULL DEFAULT '',
@@ -53,7 +54,7 @@ CREATE TABLE IF NOT EXISTS return_items (
     barcode TEXT NOT NULL,
     item_name TEXT NOT NULL,
     sku TEXT DEFAULT '',
-    supplier_id TEXT REFERENCES suppliers(id) ON DELETE SET NULL,
+    supplier_id TEXT DEFAULT NULL,
     supplier_name TEXT NOT NULL,
     supplier_pic TEXT DEFAULT '',
     supplier_phone TEXT DEFAULT '',
@@ -63,13 +64,13 @@ CREATE TABLE IF NOT EXISTS return_items (
     category TEXT NOT NULL DEFAULT '',
     return_reason TEXT NOT NULL,
     condition_notes TEXT DEFAULT '',
-    received_date DATE NOT NULL,
-    due_date DATE NOT NULL,
+    received_date TEXT NOT NULL DEFAULT '',
+    due_date TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'Menunggu Pengambilan',
     location_slot TEXT NOT NULL DEFAULT '',
     estimated_value NUMERIC DEFAULT 0,
-    picked_up_date DATE,
-    picked_up_by TEXT,
+    picked_up_date TEXT DEFAULT NULL,
+    picked_up_by TEXT DEFAULT NULL,
     warning_history JSONB NOT NULL DEFAULT '[]'::jsonb,
     photo_url TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
@@ -122,7 +123,6 @@ ALTER TABLE storage_locations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE system_metadata ENABLE ROW LEVEL SECURITY;
 
 -- 8. RLS POLICIES (Akses Terbuka untuk Operasional Tim Gudang/Backroom dengan Anon & Authenticated Key)
--- Suppliers Policies
 DROP POLICY IF EXISTS "Allow all access to suppliers" ON suppliers;
 CREATE POLICY "Allow all access to suppliers" ON suppliers
     FOR ALL
@@ -130,7 +130,6 @@ CREATE POLICY "Allow all access to suppliers" ON suppliers
     USING (true)
     WITH CHECK (true);
 
--- Master Products Policies
 DROP POLICY IF EXISTS "Allow all access to master_products" ON master_products;
 CREATE POLICY "Allow all access to master_products" ON master_products
     FOR ALL
@@ -138,7 +137,6 @@ CREATE POLICY "Allow all access to master_products" ON master_products
     USING (true)
     WITH CHECK (true);
 
--- Return Items Policies
 DROP POLICY IF EXISTS "Allow all access to return_items" ON return_items;
 CREATE POLICY "Allow all access to return_items" ON return_items
     FOR ALL
@@ -146,7 +144,6 @@ CREATE POLICY "Allow all access to return_items" ON return_items
     USING (true)
     WITH CHECK (true);
 
--- Storage Locations Policies
 DROP POLICY IF EXISTS "Allow all access to storage_locations" ON storage_locations;
 CREATE POLICY "Allow all access to storage_locations" ON storage_locations
     FOR ALL
@@ -154,7 +151,6 @@ CREATE POLICY "Allow all access to storage_locations" ON storage_locations
     USING (true)
     WITH CHECK (true);
 
--- System Metadata Policies
 DROP POLICY IF EXISTS "Allow all access to system_metadata" ON system_metadata;
 CREATE POLICY "Allow all access to system_metadata" ON system_metadata
     FOR ALL
@@ -162,12 +158,37 @@ CREATE POLICY "Allow all access to system_metadata" ON system_metadata
     USING (true)
     WITH CHECK (true);
 
--- 9. SUPABASE REALTIME CONFIGURATION (Realtime Sync Lintas Device)
--- Aktifkan broadcast perubahan realtime untuk tabel operasional
-ALTER PUBLICATION supabase_realtime ADD TABLE suppliers;
-ALTER PUBLICATION supabase_realtime ADD TABLE master_products;
-ALTER PUBLICATION supabase_realtime ADD TABLE return_items;
-ALTER PUBLICATION supabase_realtime ADD TABLE storage_locations;
+-- 9. SUPABASE REALTIME CONFIGURATION (Idempotent: aman dijalankan berulang kali)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' AND tablename = 'suppliers'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE suppliers;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' AND tablename = 'master_products'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE master_products;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' AND tablename = 'return_items'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE return_items;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' AND tablename = 'storage_locations'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE storage_locations;
+  END IF;
+END $$;
 
 -- REPLICA IDENTITY FULL agar payload event UPDATE dan DELETE menyertakan data lengkap
 ALTER TABLE suppliers REPLICA IDENTITY FULL;

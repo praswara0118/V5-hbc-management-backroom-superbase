@@ -7,6 +7,7 @@ import {
 import { SearchableSupplierSelect, SupplierOption } from './SearchableSupplierSelect';
 import { getSupabaseConfig, isSupabaseConfigured, testSupabaseConnection } from '../supabase';
 import { migrateCurrentDataToSupabase } from '../services/supabaseService';
+import { SUPABASE_SCHEMA_SQL } from '../utils/supabaseSql';
 import {
   Lock,
   Unlock,
@@ -97,7 +98,7 @@ export const DatabaseManagementView: React.FC<DatabaseManagementViewProps> = ({
   const [supabaseUrlInput, setSupabaseUrlInput] = useState(() => getSupabaseConfig().url);
   const [supabaseAnonKeyInput, setSupabaseAnonKeyInput] = useState(() => getSupabaseConfig().anonKey);
   const [isTestingSupabase, setIsTestingSupabase] = useState(false);
-  const [supabaseTestResult, setSupabaseTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [supabaseTestResult, setSupabaseTestResult] = useState<{ success: boolean; message: string; tableReady?: boolean } | null>(null);
   const [isMigratingData, setIsMigratingData] = useState(false);
   const [migrationProgress, setMigrationProgress] = useState<{ step: string; pct: number } | null>(null);
   const [migrationResult, setMigrationResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -137,11 +138,49 @@ export const DatabaseManagementView: React.FC<DatabaseManagementViewProps> = ({
     }
   };
 
+  const handleCopySql = () => {
+    try {
+      navigator.clipboard.writeText(SUPABASE_SCHEMA_SQL);
+      setCopiedSql(true);
+      if (showAlert) showAlert('✓ Seluruh skrip SQL skema Supabase berhasil disalin ke clipboard!');
+      setTimeout(() => setCopiedSql(false), 3000);
+    } catch {
+      alert('Gagal menyalin otomatis. Silakan pilih dan salin teks SQL dari kotak di bawah.');
+    }
+  };
+
+  const handleDownloadSql = () => {
+    try {
+      const blob = new Blob([SUPABASE_SCHEMA_SQL], { type: 'text/sql' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'supabase-schema.sql';
+      a.click();
+      URL.revokeObjectURL(url);
+      if (showAlert) showAlert('✓ File supabase-schema.sql berhasil diunduh!');
+    } catch (err: any) {
+      alert('Gagal mengunduh file SQL: ' + err.message);
+    }
+  };
+
   const handleExecuteMigration = async () => {
     if (!isSupabaseConfigured() && !supabaseUrlInput.trim()) {
-      alert('Harap simpan URL dan Anon Key Supabase terlebih dahulu.');
+      alert('Harap masukkan dan simpan URL serta Anon Key Supabase terlebih dahulu.');
       return;
     }
+
+    // Pre-flight check: Pastikan koneksi dan tabel siap
+    const preCheck = await testSupabaseConnection();
+    if (!preCheck.success) {
+      setShowSqlGuide(true);
+      setMigrationResult({
+        success: false,
+        message: `${preCheck.message} Panduan skema SQL telah dibuka di bawah. Harap salin dan jalankan skrip SQL di Supabase SQL Editor terlebih dahulu, kemudian ulangi tombol migrasi ini.`,
+      });
+      return;
+    }
+
     const totalCount = suppliers.length + returnItems.length + masterProducts.length + storageLocations.length;
     if (!confirm(`Mulai migrasikan ${totalCount} total data (Supplier, Retur, Master Produk, dan Lokasi Rak) ke Supabase?`)) {
       return;
@@ -149,7 +188,7 @@ export const DatabaseManagementView: React.FC<DatabaseManagementViewProps> = ({
 
     setIsMigratingData(true);
     setMigrationResult(null);
-    setMigrationProgress({ step: 'Menyiapkan koneksi...', pct: 5 });
+    setMigrationProgress({ step: 'Menghubungkan ke Supabase...', pct: 5 });
 
     try {
       const result = await migrateCurrentDataToSupabase(
@@ -938,7 +977,7 @@ export const DatabaseManagementView: React.FC<DatabaseManagementViewProps> = ({
               </div>
 
               {supabaseTestResult && (
-                <div className={`p-3 rounded-lg text-xs flex items-start gap-2 ${
+                <div className={`p-3.5 rounded-lg text-xs flex items-start gap-2.5 ${
                   supabaseTestResult.success
                     ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
                     : 'bg-rose-50 border border-rose-200 text-rose-800'
@@ -948,11 +987,21 @@ export const DatabaseManagementView: React.FC<DatabaseManagementViewProps> = ({
                   ) : (
                     <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
                   )}
-                  <div>
-                    <div className="font-semibold">
+                  <div className="flex-1">
+                    <div className="font-semibold text-xs">
                       {supabaseTestResult.success ? 'Koneksi Berhasil' : 'Koneksi Terkendala'}
                     </div>
-                    <div className="text-[11px] mt-0.5">{supabaseTestResult.message}</div>
+                    <div className="text-[11px] mt-0.5 leading-relaxed">{supabaseTestResult.message}</div>
+                    {supabaseTestResult.tableReady === false && (
+                      <button
+                        type="button"
+                        onClick={() => setShowSqlGuide(true)}
+                        className="mt-2.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        <span>Buka &amp; Salin Skrip SQL Skema Sekarang</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
@@ -960,33 +1009,79 @@ export const DatabaseManagementView: React.FC<DatabaseManagementViewProps> = ({
 
             {/* Step 2: SQL Guide Modal / Accordion */}
             {showSqlGuide && (
-              <div className="p-4 bg-neutral-900 text-neutral-200 rounded-xl border border-neutral-700 space-y-3">
-                <div className="flex items-center justify-between">
+              <div className="p-4 bg-neutral-900 text-neutral-200 rounded-xl border border-neutral-700 space-y-3.5 animate-in fade-in">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-neutral-800 pb-2.5">
                   <div className="flex items-center gap-2">
                     <FileText className="w-4 h-4 text-emerald-400" />
                     <span className="font-bold text-xs text-white uppercase tracking-wider">
-                      Langkah Pembuatan Tabel di Supabase SQL Editor
+                      Skema PostgreSQL Supabase (supabase-schema.sql)
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigator.clipboard.writeText(`-- File supabase-schema.sql di root repository`);
-                      setCopiedSql(true);
-                      setTimeout(() => setCopiedSql(false), 2500);
-                    }}
-                    className="px-2.5 py-1 bg-neutral-800 hover:bg-neutral-700 text-white rounded text-[11px] font-semibold flex items-center gap-1"
-                  >
-                    {copiedSql ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                    <span>{copiedSql ? 'Tersalin!' : 'Salin Lokasi File'}</span>
-                  </button>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={handleCopySql}
+                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs"
+                    >
+                      {copiedSql ? <Check className="w-3.5 h-3.5 text-white" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedSql ? '✓ Skrip SQL Tersalin!' : 'Salin Seluruh Skrip SQL (1-Klik)'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleDownloadSql}
+                      className="px-2.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 hover:text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 border border-neutral-700 cursor-pointer"
+                      title="Unduh file supabase-schema.sql ke perangkat"
+                    >
+                      <Download className="w-3.5 h-3.5 text-blue-400" />
+                      <span>Unduh File .sql</span>
+                    </button>
+                  </div>
                 </div>
 
-                <div className="text-xs text-neutral-300 leading-relaxed space-y-1.5 font-sans">
-                  <p>1. Buka dashboard proyek Supabase Anda di browser.</p>
-                  <p>2. Masuk ke menu <strong>SQL Editor</strong> di bilah navigasi kiri Supabase.</p>
-                  <p>3. Buka file <code>supabase-schema.sql</code> yang telah disediakan di root proyek ini, lalu salin dan jalankan seluruh isinya (Run SQL).</p>
-                  <p>4. Skrip ini akan membuat tabel <code>suppliers</code>, <code>master_products</code>, <code>return_items</code>, <code>storage_locations</code>, mengaktifkan RLS serta publikasi <code>supabase_realtime</code>.</p>
+                <div className="text-xs text-neutral-300 leading-relaxed space-y-2 font-sans bg-neutral-850 p-3 rounded-lg border border-neutral-800">
+                  <div className="font-semibold text-emerald-400 flex items-center gap-1.5">
+                    <span>Petunjuk Cara Menjalankan di Supabase:</span>
+                  </div>
+                  <ol className="list-decimal list-inside space-y-1 text-neutral-300 text-[11px]">
+                    <li>
+                      Klik tombol hijau <strong className="text-white">"Salin Seluruh Skrip SQL"</strong> di atas.
+                    </li>
+                    <li>
+                      Buka dashboard proyek Supabase Anda:{' '}
+                      <a
+                        href="https://supabase.com/dashboard"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-emerald-400 hover:underline inline-flex items-center gap-0.5 font-mono"
+                      >
+                        supabase.com/dashboard <ExternalLink className="w-3 h-3 inline" />
+                      </a>
+                    </li>
+                    <li>
+                      Pilih menu <strong className="text-white">SQL Editor</strong> di bilah menu sebelah kiri.
+                    </li>
+                    <li>
+                      Klik <strong className="text-white">New query</strong>, lalu tempel (<kbd className="font-mono bg-neutral-800 px-1 py-0.5 rounded text-[10px]">Ctrl + V</kbd>) skrip yang telah disalin.
+                    </li>
+                    <li>
+                      Klik tombol hijau <strong className="text-white">Run</strong> (atau tekan <kbd className="font-mono bg-neutral-800 px-1 py-0.5 rounded text-[10px]">Ctrl + Enter</kbd>).
+                    </li>
+                    <li>
+                      Setelah selesai, kembali ke halaman ini dan klik tombol <strong className="text-emerald-400">"Uji Koneksi Supabase"</strong> atau <strong className="text-emerald-400">"Mulai Migrasikan Seluruh Data ke Supabase"</strong>!
+                    </li>
+                  </ol>
+                </div>
+
+                {/* Scrollable SQL code viewer */}
+                <div>
+                  <div className="flex items-center justify-between text-[10px] text-neutral-400 font-mono mb-1">
+                    <span>Pratinjau Kode SQL:</span>
+                    <span>Tabel: suppliers, master_products, return_items, storage_locations, system_metadata</span>
+                  </div>
+                  <pre className="max-h-48 overflow-y-auto text-[10px] font-mono bg-neutral-950 p-3 rounded-lg border border-neutral-800 text-neutral-300 select-all leading-normal">
+                    {SUPABASE_SCHEMA_SQL}
+                  </pre>
                 </div>
               </div>
             )}
