@@ -6,7 +6,9 @@ import {
   getGmailComposeUrl,
   getMailtoUrl,
   formatIndoDate,
-  getDaysRemaining,
+  formatIndoDateTime,
+  getOverdueDetail,
+  WarningTier,
 } from '../utils/notification';
 import {
   X,
@@ -19,13 +21,17 @@ import {
   Calendar,
   User,
   History,
+  Clock,
+  AlertTriangle,
+  Image as ImageIcon,
+  Flame,
 } from 'lucide-react';
 
 interface WarningModalProps {
   isOpen: boolean;
   onClose: () => void;
   item: ReturnItem | null;
-  onLogWarning: (itemId: string, log: WarningLog) => void;
+  onLogWarning: (itemId: string, log: WarningLog, finalWarningSentAt?: string) => void;
 }
 
 export const WarningModal: React.FC<WarningModalProps> = ({
@@ -34,29 +40,50 @@ export const WarningModal: React.FC<WarningModalProps> = ({
   item,
   onLogWarning,
 }) => {
-  const [tone, setTone] = useState<'gentle' | 'urgent' | 'final'>('urgent');
+  const [tone, setTone] = useState<WarningTier>('urgent');
   const [editableMessage, setEditableMessage] = useState('');
   const [subject, setSubject] = useState('');
   const [copied, setCopied] = useState(false);
-  const [customWarehouseName, setCustomWarehouseName] = useState('Logistik Gudang Retur');
+  const [customWarehouseName, setCustomWarehouseName] = useState('Logistik Pergudangan Retur HBC');
 
   useEffect(() => {
     if (item) {
-      const daysLeft = getDaysRemaining(item.dueDate);
-      const defaultTone: 'gentle' | 'urgent' | 'final' =
-        daysLeft < 0 ? 'final' : daysLeft <= 2 ? 'urgent' : 'gentle';
-      setTone(defaultTone);
+      const overdue = getOverdueDetail(item.dueDate, item.finalWarningSentAt);
+      
+      let defaultTone: WarningTier = 'urgent';
+      if (overdue.isPastFinalDeadline) {
+        defaultTone = 'followup';
+      } else if (item.finalWarningSentAt || overdue.daysRemaining <= -4) {
+        defaultTone = 'final';
+      } else if (overdue.daysRemaining < 0) {
+        defaultTone = 'urgent';
+      } else if (overdue.isToday || overdue.daysRemaining <= 2) {
+        defaultTone = 'reminder';
+      } else {
+        defaultTone = 'gentle';
+      }
 
-      const generated = generateNotificationMessage(item, defaultTone, customWarehouseName);
+      setTone(defaultTone);
+      const generated = generateNotificationMessage(
+        item,
+        defaultTone,
+        customWarehouseName,
+        item.finalWarningSentAt
+      );
       setSubject(generated.subject);
       setEditableMessage(generated.message);
     }
   }, [item, customWarehouseName]);
 
-  const handleToneChange = (newTone: 'gentle' | 'urgent' | 'final') => {
+  const handleToneChange = (newTone: WarningTier) => {
     setTone(newTone);
     if (item) {
-      const generated = generateNotificationMessage(item, newTone, customWarehouseName);
+      const generated = generateNotificationMessage(
+        item,
+        newTone,
+        customWarehouseName,
+        item.finalWarningSentAt
+      );
       setSubject(generated.subject);
       setEditableMessage(generated.message);
     }
@@ -74,15 +101,20 @@ export const WarningModal: React.FC<WarningModalProps> = ({
     const waUrl = getWhatsAppUrl(item.supplierPhone, editableMessage);
     window.open(waUrl, '_blank', 'noopener,noreferrer');
 
+    const newFinalTimestamp =
+      tone === 'final'
+        ? item.finalWarningSentAt || new Date().toISOString()
+        : item.finalWarningSentAt;
+
     const newLog: WarningLog = {
       id: `log-${Date.now()}`,
       timestamp: new Date().toISOString(),
       channel: 'whatsapp',
       recipient: item.supplierPhone,
       tone: tone,
-      message: `Peringatan (${tone}) dikirim via WhatsApp ke ${item.supplierPhone}`,
+      message: `Peringatan (${getToneLabel(tone)}) dikirim via WhatsApp ke ${item.supplierPhone}`,
     };
-    onLogWarning(item.id, newLog);
+    onLogWarning(item.id, newLog, newFinalTimestamp);
   };
 
   const handleSendGmail = () => {
@@ -91,15 +123,20 @@ export const WarningModal: React.FC<WarningModalProps> = ({
     const gmailUrl = getGmailComposeUrl(item.supplierEmail, subject, editableMessage);
     window.open(gmailUrl, '_blank', 'noopener,noreferrer');
 
+    const newFinalTimestamp =
+      tone === 'final'
+        ? item.finalWarningSentAt || new Date().toISOString()
+        : item.finalWarningSentAt;
+
     const newLog: WarningLog = {
       id: `log-${Date.now()}`,
       timestamp: new Date().toISOString(),
       channel: 'gmail',
       recipient: item.supplierEmail,
       tone: tone,
-      message: `Pemberitahuan (${tone}) dikirim via Gmail ke ${item.supplierEmail}`,
+      message: `Pemberitahuan (${getToneLabel(tone)}) dikirim via Gmail ke ${item.supplierEmail}`,
     };
-    onLogWarning(item.id, newLog);
+    onLogWarning(item.id, newLog, newFinalTimestamp);
   };
 
   const handleSendMailto = () => {
@@ -107,6 +144,11 @@ export const WarningModal: React.FC<WarningModalProps> = ({
 
     const mailtoUrl = getMailtoUrl(item.supplierEmail, subject, editableMessage);
     window.location.href = mailtoUrl;
+
+    const newFinalTimestamp =
+      tone === 'final'
+        ? item.finalWarningSentAt || new Date().toISOString()
+        : item.finalWarningSentAt;
 
     const newLog: WarningLog = {
       id: `log-${Date.now()}`,
@@ -116,39 +158,59 @@ export const WarningModal: React.FC<WarningModalProps> = ({
       tone: tone,
       message: `Pemberitahuan via email klien lokal ke ${item.supplierEmail}`,
     };
-    onLogWarning(item.id, newLog);
+    onLogWarning(item.id, newLog, newFinalTimestamp);
+  };
+
+  const getToneLabel = (t: WarningTier): string => {
+    switch (t) {
+      case 'gentle':
+        return 'Pengingat Ramah';
+      case 'reminder':
+        return 'Peringatan Keterlambatan';
+      case 'urgent':
+        return 'Peringatan Mendesak';
+      case 'final':
+        return 'Peringatan Terakhir (2x24 Jam & PA0)';
+      case 'followup':
+        return 'Tindak Lanjut PA0';
+      default:
+        return t;
+    }
   };
 
   if (!isOpen || !item) return null;
 
-  const daysLeft = getDaysRemaining(item.dueDate);
+  const overdue = getOverdueDetail(item.dueDate, item.finalWarningSentAt);
   const waAvailable = Boolean(item.supplierPhone);
   const emailAvailable = Boolean(item.supplierEmail);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden border border-neutral-200 flex flex-col max-h-[92vh]">
+        {/* Header */}
         <div className="px-6 py-4 border-b border-neutral-200 flex items-center justify-between bg-neutral-900 text-white">
           <div className="flex items-center gap-2.5">
             <ShieldAlert className="w-5 h-5 text-amber-400" />
             <div>
               <h2 className="font-semibold text-base tracking-tight">
-                Kirim Peringatan ke Supplier
+                Notifikasi Peringatan Supplier Terlalu Lama
               </h2>
               <div className="text-xs text-neutral-400">
-                Peringatan tenggat waktu pengambilan barang return
+                Pemberitahuan tenggat waktu, klausul batas 2x24 jam &amp; proses pemusnahan PA0
               </div>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-md text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors"
+            className="p-1 rounded-md text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="p-6 overflow-y-auto space-y-5">
+        {/* Body */}
+        <div className="p-6 overflow-y-auto space-y-4">
+          {/* Item & Contact Info */}
           <div className="bg-neutral-50 rounded-lg p-4 border border-neutral-200 grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <div className="text-xs font-semibold text-neutral-500 uppercase tracking-wider mb-1">
@@ -156,15 +218,22 @@ export const WarningModal: React.FC<WarningModalProps> = ({
               </div>
               <div className="text-sm font-bold text-neutral-900">{item.itemName}</div>
               <div className="text-xs text-neutral-600 mt-1 space-y-0.5">
-                <div>Barcode: <span className="font-mono font-medium">{item.barcode}</span></div>
-                <div>Qty: <span className="font-semibold">{item.quantity} {item.unit}</span> · Alasan: <span className="font-medium">{item.returnReason}</span></div>
-                <div>Lokasi: <span className="font-medium text-neutral-800">{item.locationSlot}</span></div>
+                <div>
+                  Barcode: <span className="font-mono font-medium">{item.barcode}</span>
+                </div>
+                <div>
+                  Qty: <span className="font-semibold">{item.quantity} {item.unit}</span> · Alasan:{' '}
+                  <span className="font-medium">{item.returnReason}</span>
+                </div>
+                <div>
+                  Lokasi Simpan: <span className="font-medium text-neutral-800">{item.locationSlot}</span>
+                </div>
               </div>
             </div>
 
             <div>
               <div className="text-xs font-semibold text-neutral-500 uppercase tracking-wider mb-1">
-                Kontak Supplier
+                Kontak Supplier / Rekanan
               </div>
               <div className="text-sm font-bold text-neutral-900">{item.supplierName}</div>
               <div className="text-xs text-neutral-600 mt-1 space-y-1">
@@ -184,117 +253,208 @@ export const WarningModal: React.FC<WarningModalProps> = ({
             </div>
           </div>
 
+          {/* Exact Overdue & Deadline Banner */}
           <div
-            className={`p-3 rounded-lg border flex items-center justify-between ${
-              daysLeft < 0
-                ? 'bg-rose-50 border-rose-200 text-rose-900'
-                : daysLeft <= 2
-                ? 'bg-amber-50 border-amber-200 text-amber-900'
-                : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+            className={`p-3.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 ${
+              overdue.isOverdue
+                ? 'bg-rose-50/90 border-rose-300 text-rose-950'
+                : overdue.isToday
+                ? 'bg-amber-50 border-amber-300 text-amber-950'
+                : 'bg-emerald-50 border-emerald-300 text-emerald-950'
             }`}
           >
-            <div className="flex items-center gap-2">
-              <Calendar className="w-4 h-4 shrink-0" />
-              <div className="text-xs">
-                <span className="font-semibold">Tenggat Waktu: </span>
-                <span>{formatIndoDate(item.dueDate)}</span>
-                <span className="ml-2 font-mono font-bold">
-                  ({daysLeft < 0 ? `LEWAT ${Math.abs(daysLeft)} HARI` : daysLeft === 0 ? 'HARI INI' : `${daysLeft} HARI LAGI`})
-                </span>
+            <div className="flex items-start gap-2.5">
+              <Clock className="w-4 h-4 shrink-0 mt-0.5 text-current" />
+              <div className="text-xs space-y-0.5">
+                <div className="font-semibold flex items-center gap-1.5">
+                  <span>Tenggat Awal: {formatIndoDate(item.dueDate)}</span>
+                  <span className="font-mono font-bold px-1.5 py-0.2 rounded bg-white/70">
+                    {overdue.exactDurationLabel.toUpperCase()}
+                  </span>
+                </div>
+                {item.finalWarningSentAt && (
+                  <div className="text-[11px] font-medium flex items-center gap-1">
+                    <Flame className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    <span>
+                      {overdue.isPastFinalDeadline ? (
+                        <strong className="text-rose-700">
+                          Batas 2x24 jam telah berakhir pada {formatIndoDateTime(overdue.finalDeadlineDate || '')}. Proses PA0 (Pemusnahan) berlaku.
+                        </strong>
+                      ) : (
+                        <span>
+                          Sisa toleransi 2x24 jam: <strong>{overdue.finalWarningRemainingHours} jam lagi</strong> (Deadline:{' '}
+                          {formatIndoDateTime(overdue.finalDeadlineDate || '')})
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
+
             <span
-              className={`text-[11px] font-semibold px-2 py-0.5 rounded ${
-                daysLeft < 0
-                  ? 'bg-rose-200 text-rose-800'
-                  : daysLeft <= 2
-                  ? 'bg-amber-200 text-amber-800'
-                  : 'bg-emerald-200 text-emerald-800'
+              className={`text-[11px] font-bold px-2.5 py-1 rounded-md self-start sm:self-auto shrink-0 ${
+                overdue.isOverdue
+                  ? 'bg-rose-600 text-white'
+                  : overdue.isToday
+                  ? 'bg-amber-500 text-white'
+                  : 'bg-emerald-600 text-white'
               }`}
             >
               {item.status}
             </span>
           </div>
 
+          {/* 5-Tier Notification Tone Selector */}
           <div>
-            <label className="block text-xs font-semibold text-neutral-700 mb-1.5">
-              Tingkat Urgensi Notifikasi:
+            <label className="block text-xs font-semibold text-neutral-800 mb-1.5">
+              Tingkat Urgensi Peringatan (5 Tingkatan):
             </label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              {/* Tier 1 */}
               <button
                 type="button"
                 onClick={() => handleToneChange('gentle')}
-                className={`px-3 py-2 text-xs font-medium rounded-lg border text-left transition-colors ${
+                className={`p-2.5 text-xs font-medium rounded-lg border text-left transition-all cursor-pointer ${
                   tone === 'gentle'
-                    ? 'border-emerald-600 bg-emerald-50 text-emerald-900 font-semibold'
+                    ? 'border-emerald-600 bg-emerald-50 text-emerald-950 ring-1 ring-emerald-600'
                     : 'border-neutral-200 hover:bg-neutral-50 text-neutral-700'
                 }`}
               >
-                <div className="font-semibold">1. Pengingat Ramah</div>
-                <div className="text-[11px] opacity-75 mt-0.5">Barang siap diambil</div>
+                <div className="font-bold text-emerald-800">1. Pengingat Ramah</div>
+                <div className="text-[11px] text-neutral-500 mt-0.5">Info barang siap diambil</div>
               </button>
 
+              {/* Tier 2 */}
+              <button
+                type="button"
+                onClick={() => handleToneChange('reminder')}
+                className={`p-2.5 text-xs font-medium rounded-lg border text-left transition-all cursor-pointer ${
+                  tone === 'reminder'
+                    ? 'border-sky-600 bg-sky-50 text-sky-950 ring-1 ring-sky-600'
+                    : 'border-neutral-200 hover:bg-neutral-50 text-neutral-700'
+                }`}
+              >
+                <div className="font-bold text-sky-800">2. Peringatan Jatuh Tempo</div>
+                <div className="text-[11px] text-neutral-500 mt-0.5">Jatuh tempo / telat 1-3 hari</div>
+              </button>
+
+              {/* Tier 3 */}
               <button
                 type="button"
                 onClick={() => handleToneChange('urgent')}
-                className={`px-3 py-2 text-xs font-medium rounded-lg border text-left transition-colors ${
+                className={`p-2.5 text-xs font-medium rounded-lg border text-left transition-all cursor-pointer ${
                   tone === 'urgent'
-                    ? 'border-amber-600 bg-amber-50 text-amber-900 font-semibold'
+                    ? 'border-amber-600 bg-amber-50 text-amber-950 ring-1 ring-amber-600'
                     : 'border-neutral-200 hover:bg-neutral-50 text-neutral-700'
                 }`}
               >
-                <div className="font-semibold">2. Peringatan Mendesak</div>
-                <div className="text-[11px] opacity-75 mt-0.5">Mendekati batas tenggat</div>
+                <div className="font-bold text-amber-800">3. Peringatan Mendesak</div>
+                <div className="text-[11px] text-neutral-500 mt-0.5">Kapasitas retur penuh / telat</div>
               </button>
 
+              {/* Tier 4: Final Warning */}
               <button
                 type="button"
                 onClick={() => handleToneChange('final')}
-                className={`px-3 py-2 text-xs font-medium rounded-lg border text-left transition-colors ${
+                className={`p-2.5 text-xs font-medium rounded-lg border text-left transition-all cursor-pointer sm:col-span-2 lg:col-span-1.5 ${
                   tone === 'final'
-                    ? 'border-rose-600 bg-rose-50 text-rose-900 font-semibold'
+                    ? 'border-rose-600 bg-rose-50 text-rose-950 ring-1 ring-rose-600'
                     : 'border-neutral-200 hover:bg-neutral-50 text-neutral-700'
                 }`}
               >
-                <div className="font-semibold">3. Peringatan Terakhir</div>
-                <div className="text-[11px] opacity-75 mt-0.5">Telah jatuh tempo / lewat</div>
+                <div className="font-bold text-rose-700 flex items-center gap-1">
+                  <Flame className="w-3.5 h-3.5 text-rose-600" />
+                  <span>4. Peringatan Terakhir (Batas 2x24 Jam)</span>
+                </div>
+                <div className="text-[11px] text-neutral-500 mt-0.5">
+                  Batas waktu 48 jam &amp; klausul pemusnahan PA0
+                </div>
+              </button>
+
+              {/* Tier 5: Post-Deadline Followup */}
+              <button
+                type="button"
+                onClick={() => handleToneChange('followup')}
+                className={`p-2.5 text-xs font-medium rounded-lg border text-left transition-all cursor-pointer ${
+                  tone === 'followup'
+                    ? 'border-neutral-800 bg-neutral-900 text-white ring-1 ring-neutral-900'
+                    : 'border-neutral-200 hover:bg-neutral-50 text-neutral-700'
+                }`}
+              >
+                <div className="font-bold flex items-center gap-1">
+                  <span>5. Tindak Lanjut Pasca Batas</span>
+                </div>
+                <div className={`text-[11px] mt-0.5 ${tone === 'followup' ? 'text-neutral-300' : 'text-neutral-500'}`}>
+                  Batas 2x24 jam habis, eksekusi PA0
+                </div>
               </button>
             </div>
           </div>
 
+          {/* Photo Attachment Info */}
+          {item.photoUrl && (
+            <div className="p-3 bg-neutral-50 border border-neutral-200 rounded-lg flex items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-2">
+                <ImageIcon className="w-4 h-4 text-emerald-600 shrink-0" />
+                <div>
+                  <span className="font-semibold text-neutral-800">Foto Fisik Barang Terdata:</span>
+                  <span className="text-neutral-500 ml-1">
+                    {item.photoUrl.startsWith('http')
+                      ? 'Link foto otomatis disertakan pada teks pesan WhatsApp & Gmail'
+                      : 'Foto fisik siap diverifikasi langsung di gudang'}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const w = window.open('');
+                  w?.document.write(`<img src="${item.photoUrl}" style="max-width:100%;height:auto;margin:auto;display:block;" />`);
+                }}
+                className="text-[11px] text-emerald-700 hover:underline font-semibold shrink-0 cursor-pointer"
+              >
+                Lihat Foto
+              </button>
+            </div>
+          )}
+
+          {/* Sender Customizer */}
           <div className="flex items-center gap-2">
-            <span className="text-xs text-neutral-600">Nama Pengirim/Gudang:</span>
+            <span className="text-xs text-neutral-600 font-medium">Nama Bagian / Gudang:</span>
             <input
               type="text"
               value={customWarehouseName}
               onChange={(e) => setCustomWarehouseName(e.target.value)}
-              placeholder="Contoh: Logistik Gudang Retur"
-              className="text-xs px-2.5 py-1 border border-neutral-300 rounded focus:outline-none focus:border-neutral-900 flex-1 max-w-xs"
+              placeholder="Contoh: Bagian Gudang Retur HBC"
+              className="text-xs px-2.5 py-1.5 border border-neutral-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-neutral-900 flex-1 max-w-sm"
             />
           </div>
 
+          {/* Message Preview */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-xs font-semibold text-neutral-700">
-                Pratinjau Pesan (Dapat diedit langsung sebelum dikirim):
+                Pratinjau Isi Pesan (Dapat diedit langsung sebelum dikirim):
               </label>
               <button
                 type="button"
                 onClick={handleCopy}
-                className="text-xs text-neutral-600 hover:text-neutral-900 flex items-center gap-1 font-medium transition-colors"
+                className="text-xs text-neutral-600 hover:text-neutral-900 flex items-center gap-1 font-medium transition-colors cursor-pointer"
               >
                 {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
                 <span>{copied ? 'Tersalin!' : 'Salin Teks'}</span>
               </button>
             </div>
             <textarea
-              rows={8}
+              rows={9}
               value={editableMessage}
               onChange={(e) => setEditableMessage(e.target.value)}
               className="w-full text-xs font-mono p-3 bg-neutral-900 text-neutral-100 rounded-lg border border-neutral-700 focus:outline-none focus:ring-1 focus:ring-emerald-500 leading-relaxed"
             />
           </div>
 
+          {/* History */}
           {item.warningHistory && item.warningHistory.length > 0 && (
             <div className="border-t border-neutral-200 pt-3">
               <div className="text-xs font-semibold text-neutral-700 flex items-center gap-1.5 mb-2">
@@ -325,10 +485,11 @@ export const WarningModal: React.FC<WarningModalProps> = ({
           )}
         </div>
 
+        {/* Footer Actions */}
         <div className="px-6 py-4 bg-neutral-50 border-t border-neutral-200 flex flex-wrap items-center justify-between gap-3">
           <button
             onClick={onClose}
-            className="px-4 py-2 border border-neutral-300 hover:bg-white text-neutral-700 rounded-md text-sm font-medium transition-colors"
+            className="px-4 py-2 border border-neutral-300 hover:bg-white text-neutral-700 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
           >
             Tutup
           </button>
@@ -337,7 +498,7 @@ export const WarningModal: React.FC<WarningModalProps> = ({
             <button
               onClick={handleSendWhatsApp}
               disabled={!waAvailable}
-              className={`px-4 py-2 rounded-md text-sm font-semibold flex items-center gap-2 transition-colors ${
+              className={`px-4 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer ${
                 waAvailable
                   ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
                   : 'bg-neutral-200 text-neutral-400 cursor-not-allowed'
@@ -351,25 +512,16 @@ export const WarningModal: React.FC<WarningModalProps> = ({
             <button
               onClick={handleSendGmail}
               disabled={!emailAvailable}
-              className={`px-4 py-2 rounded-md text-sm font-semibold flex items-center gap-2 transition-colors ${
+              className={`px-4 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer ${
                 emailAvailable
                   ? 'bg-rose-600 hover:bg-rose-700 text-white shadow-xs'
                   : 'bg-neutral-200 text-neutral-400 cursor-not-allowed'
               }`}
             >
               <Mail className="w-4 h-4" />
-              <span>Kirim via Gmail</span>
+              <span>Buka Gmail</span>
               <ExternalLink className="w-3.5 h-3.5 opacity-80" />
             </button>
-
-            {emailAvailable && (
-              <button
-                onClick={handleSendMailto}
-                className="px-3 py-2 border border-neutral-300 hover:bg-white text-neutral-700 rounded-md text-sm font-medium transition-colors"
-              >
-                App Email
-              </button>
-            )}
           </div>
         </div>
       </div>

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Supplier, ReturnItem } from '../types/inventory';
+import { Supplier, ReturnItem, MasterProduct } from '../types/inventory';
 import {
   generateConsolidatedSupplierMessage,
   getWhatsAppUrl,
@@ -24,6 +24,9 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  Database,
+  Sparkles,
+  Loader2,
 } from 'lucide-react';
 
 interface SupplierListModalProps {
@@ -31,10 +34,11 @@ interface SupplierListModalProps {
   onClose: () => void;
   suppliers: Supplier[];
   items: ReturnItem[];
-  onSaveSupplier: (supplier: Supplier) => void;
-  onDeleteSupplier: (supplierId: string) => void;
+  onSaveSupplier: (supplier: Supplier) => Promise<void> | void;
+  onDeleteSupplier: (supplierId: string) => Promise<void> | void;
   onBatchDeleteSuppliers?: (supplierIds: string[]) => void;
   onFilterBySupplier: (supplierId: string) => void;
+  masterProducts?: MasterProduct[];
 }
 
 export const SupplierListModal: React.FC<SupplierListModalProps> = ({
@@ -46,6 +50,7 @@ export const SupplierListModal: React.FC<SupplierListModalProps> = ({
   onDeleteSupplier,
   onBatchDeleteSuppliers,
   onFilterBySupplier,
+  masterProducts = [],
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [editingSup, setEditingSup] = useState<Supplier | null>(null);
@@ -67,6 +72,11 @@ export const SupplierListModal: React.FC<SupplierListModalProps> = ({
   const [address, setAddress] = useState('');
   const [notes, setNotes] = useState('');
 
+  // Status & feedback states
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [autofilledInfo, setAutofilledInfo] = useState<string | null>(null);
+
   const handleStartCreate = () => {
     setIsCreating(true);
     setEditingSup(null);
@@ -78,6 +88,8 @@ export const SupplierListModal: React.FC<SupplierListModalProps> = ({
     setDefaultDueDays(7);
     setAddress('');
     setNotes('');
+    setSaveError(null);
+    setAutofilledInfo(null);
   };
 
   const handleStartEdit = (sup: Supplier) => {
@@ -91,51 +103,161 @@ export const SupplierListModal: React.FC<SupplierListModalProps> = ({
     setDefaultDueDays(sup.defaultDueDays || 7);
     setAddress(sup.address || '');
     setNotes(sup.notes || '');
+    setSaveError(null);
+    setAutofilledInfo(null);
   };
 
-  // Deteksi real-time supplier yang serupa di database saat mengetik nama (cth: ketik "Daya" -> tampilkan "PT. DAYA MULIA SEJAHTERA")
-  const similarSuppliers = useMemo(() => {
+  // Rekomendasi dinamis saat pengguna mulai mengetik nama supplier (cth: "Aulia", "Indofood", "Mayora")
+  // Mencari dari tabel supplier yang ada DAN master_products yang tersimpan di database
+  const masterSupplierRecommendations = useMemo(() => {
     const q = name.trim().toLowerCase();
     if (q.length < 2) return [];
 
     const words = q.split(/\s+/).filter((w) => w.length > 1);
+    const seenNames = new Set<string>();
 
-    return suppliers
-      .filter((s) => {
-        if (!s || !s.name) return false;
-        if (editingSup && s.id === editingSup.id) return false;
-        const sName = s.name.toLowerCase();
-        const sCode = (s.code || '').toLowerCase();
+    const results: Array<{
+      id?: string;
+      name: string;
+      code: string;
+      picName: string;
+      phone: string;
+      email: string;
+      address: string;
+      defaultDueDays: number;
+      notes: string;
+      source: 'DATABASE_SUPPLIER' | 'DATABASE_MASTER_PRODUK';
+      productCount?: number;
+    }> = [];
 
-        // 1. Cek langsung substring nama atau kode
-        if (sName.includes(q) || sCode.includes(q)) return true;
+    // 1. Cari dari tabel suppliers
+    suppliers.forEach((s) => {
+      if (!s || !s.name) return;
+      if (editingSup && s.id === editingSup.id) return;
+      const sName = s.name.toLowerCase();
+      const sCode = (s.code || '').toLowerCase();
+      const match = sName.includes(q) || sCode.includes(q) || words.some((w) => sName.includes(w));
+      if (match && !seenNames.has(sName)) {
+        seenNames.add(sName);
+        results.push({
+          id: s.id,
+          name: s.name,
+          code: s.code || '',
+          picName: s.picName || '',
+          phone: s.phone || '',
+          email: s.email || '',
+          address: s.address || '',
+          defaultDueDays: s.defaultDueDays || 7,
+          notes: s.notes || '',
+          source: 'DATABASE_SUPPLIER',
+        });
+      }
+    });
 
-        // 2. Cek kesamaan kata kunci (misal "daya" di dalam "PT Daya Mulia")
-        return words.some((word) => sName.includes(word));
-      })
-      .slice(0, 5);
-  }, [name, suppliers, editingSup]);
+    // 2. Cari dari masterProducts
+    if (masterProducts && masterProducts.length > 0) {
+      const prodMap = new Map<string, { count: number; item: MasterProduct }>();
+      masterProducts.forEach((p) => {
+        if (!p.supplierName) return;
+        const key = p.supplierName.trim().toLowerCase();
+        const cur = prodMap.get(key);
+        if (cur) {
+          cur.count += 1;
+        } else {
+          prodMap.set(key, { count: 1, item: p });
+        }
+      });
 
-  const handleSave = (e: React.FormEvent) => {
+      prodMap.forEach(({ count, item }, key) => {
+        const match = key.includes(q) || words.some((w) => key.includes(w));
+        if (match && !seenNames.has(key)) {
+          seenNames.add(key);
+          results.push({
+            name: item.supplierName.trim(),
+            code: `SUP-${item.supplierName.slice(0, 4).toUpperCase().replace(/\s/g, '')}`,
+            picName: 'PIC Logistik Rekanan',
+            phone: item.supplierPhone || '',
+            email: item.supplierEmail || '',
+            address: '',
+            defaultDueDays: 7,
+            notes: '',
+            source: 'DATABASE_MASTER_PRODUK',
+            productCount: count,
+          });
+        }
+      });
+    }
+
+    return results.slice(0, 6);
+  }, [name, suppliers, masterProducts, editingSup]);
+
+  // Handler memilih salah satu supplier dari daftar rekomendasi -> terisi otomatis
+  const handleSelectRecommendation = (rec: any) => {
+    setName(rec.name);
+    setCode(rec.code || '');
+    setPicName(rec.picName || '');
+    setPhone(rec.phone || '');
+    setEmail(rec.email || '');
+    setDefaultDueDays(rec.defaultDueDays || 7);
+    setAddress(rec.address || '');
+    setNotes(rec.notes || '');
+
+    // Cari apakah supplier sudah ada di database untuk mencegah duplikasi
+    const existing = suppliers.find(
+      (s) => s.id === rec.id || s.name.trim().toLowerCase() === rec.name.trim().toLowerCase()
+    );
+    if (existing) {
+      setEditingSup(existing);
+      setAutofilledInfo(`✓ Data supplier "${existing.name}" ditemukan di Database Master. Informasi kontak terisi otomatis.`);
+    } else {
+      setAutofilledInfo(`✓ Informasi suplier "${rec.name}" berhasil terisi otomatis dari Database Master Produk.`);
+    }
+    setSaveError(null);
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
 
-    const savedSupplier: Supplier = {
-      id: editingSup ? editingSup.id : `sup-${Date.now()}`,
-      code: code.trim() || `SUP-${name.slice(0, 4).toUpperCase().replace(/\s/g, '')}`,
-      name: name.trim(),
-      picName: picName.trim(),
-      phone: phone.trim(),
-      email: email.trim(),
-      defaultDueDays: Number(defaultDueDays) || 7,
-      address: address.trim(),
-      notes: notes.trim(),
-      createdAt: editingSup ? editingSup.createdAt : new Date().toISOString(),
-    };
+    setIsSaving(true);
+    setSaveError(null);
 
-    onSaveSupplier(savedSupplier);
-    setIsCreating(false);
-    setEditingSup(null);
+    try {
+      const trimmedName = name.trim();
+      // Hindari duplikasi: cek apakah supplier dengan nama sama sudah ada
+      const existingMatch = suppliers.find(
+        (s) => s.name.trim().toLowerCase() === trimmedName.toLowerCase()
+      );
+
+      const targetId = editingSup
+        ? editingSup.id
+        : existingMatch
+        ? existingMatch.id
+        : `sup-${Date.now()}`;
+
+      const savedSupplier: Supplier = {
+        id: targetId,
+        code: code.trim() || `SUP-${trimmedName.slice(0, 4).toUpperCase().replace(/\s/g, '')}`,
+        name: trimmedName,
+        picName: picName.trim(),
+        phone: phone.trim(),
+        email: email.trim(),
+        defaultDueDays: Number(defaultDueDays) || 7,
+        address: address.trim(),
+        notes: notes.trim(),
+        createdAt: editingSup ? editingSup.createdAt : existingMatch ? existingMatch.createdAt : new Date().toISOString(),
+      };
+
+      await onSaveSupplier(savedSupplier);
+      setIsCreating(false);
+      setEditingSup(null);
+      setAutofilledInfo(null);
+    } catch (err: any) {
+      console.error('Error saving supplier:', err);
+      setSaveError(`Gagal menyimpan data supplier ke database master: ${err?.message || 'Koneksi database gagal'}`);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleSendConsolidatedWA = (supplier: Supplier) => {
@@ -696,9 +818,39 @@ export const SupplierListModal: React.FC<SupplierListModalProps> = ({
             </>
           ) : (
             <form onSubmit={handleSave} className="space-y-4">
-              <div className="text-xs font-bold text-neutral-900 border-b border-neutral-200 pb-2">
-                {editingSup ? `Edit Supplier: ${editingSup.name}` : 'Tambah Supplier Baru'}
+              <div className="flex items-center justify-between border-b border-neutral-200 pb-2">
+                <div className="text-xs font-bold text-neutral-900">
+                  {editingSup ? `Edit Data Supplier: ${editingSup.name}` : 'Input Supplier Baru (Terintegrasi Master)'}
+                </div>
+                {editingSup && (
+                  <span className="text-[10px] bg-blue-100 text-blue-800 font-mono px-2 py-0.5 rounded font-semibold">
+                    Mode Pembaruan Data
+                  </span>
+                )}
               </div>
+
+              {saveError && (
+                <div className="p-3 bg-rose-50 border border-rose-300 text-rose-800 rounded-lg text-xs flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{saveError}</span>
+                </div>
+              )}
+
+              {autofilledInfo && (
+                <div className="p-2.5 bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-lg text-xs flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 font-medium">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>{autofilledInfo}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setAutofilledInfo(null)}
+                    className="text-neutral-400 hover:text-neutral-700 text-xs cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="sm:col-span-2">
@@ -708,51 +860,76 @@ export const SupplierListModal: React.FC<SupplierListModalProps> = ({
                   <input
                     type="text"
                     required
-                    placeholder="Contoh: PT Indofood CBP Sukses Makmur / Daya"
+                    placeholder="Ketik nama supplier (cth: Aulia, Indofood, Mayora...)"
                     value={name}
-                    onChange={(e) => setName(e.target.value)}
+                    onChange={(e) => {
+                      setName(e.target.value);
+                      if (saveError) setSaveError(null);
+                    }}
                     className="w-full text-xs px-3 py-2 border border-neutral-300 rounded focus:outline-none focus:ring-1 focus:ring-neutral-900 font-medium"
                   />
 
-                  {/* Real-time Similar Supplier Alert Box */}
-                  {similarSuppliers.length > 0 && (
-                    <div className="mt-2 p-3 bg-amber-50 border border-amber-300 rounded-lg text-xs space-y-2 animate-in fade-in duration-150">
-                      <div className="flex items-center gap-1.5 font-bold text-amber-900">
-                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                        <span>Terdeteksi {similarSuppliers.length} supplier serupa di database:</span>
+                  {/* Rekomendasi Real-Time dari Database Master saat mengetik */}
+                  {masterSupplierRecommendations.length > 0 && (
+                    <div className="mt-2 p-3 bg-blue-50/70 border border-blue-200 rounded-xl text-xs space-y-2 animate-in fade-in duration-150">
+                      <div className="flex items-center justify-between font-bold text-blue-900">
+                        <div className="flex items-center gap-1.5">
+                          <Database className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                          <span>Ditemukan {masterSupplierRecommendations.length} supplier di Database Master:</span>
+                        </div>
+                        <span className="text-[10px] text-blue-600 font-normal">
+                          Klik untuk mengisi data otomatis
+                        </span>
                       </div>
-                      <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                        {similarSuppliers.map((s) => (
+
+                      <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+                        {masterSupplierRecommendations.map((rec, idx) => (
                           <div
-                            key={s.id}
-                            className="p-2.5 bg-white rounded-lg border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs"
+                            key={idx}
+                            className="p-2.5 bg-white rounded-lg border border-neutral-200 hover:border-blue-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs transition-all"
                           >
-                            <div>
-                              <div className="font-bold text-neutral-900 text-xs flex items-center gap-1.5">
-                                <span>{s.name}</span>
-                                <span className="font-mono text-[10px] bg-neutral-100 px-1.5 py-0.2 rounded text-neutral-600">
-                                  {s.code}
+                            <div className="space-y-0.5">
+                              <div className="font-bold text-neutral-900 text-xs flex items-center gap-1.5 flex-wrap">
+                                <span>{rec.name}</span>
+                                {rec.code && (
+                                  <span className="font-mono text-[10px] bg-neutral-100 px-1.5 py-0.2 rounded text-neutral-600">
+                                    {rec.code}
+                                  </span>
+                                )}
+                                <span className={`text-[9px] px-1.5 py-0.2 rounded font-semibold ${
+                                  rec.source === 'DATABASE_MASTER_PRODUK'
+                                    ? 'bg-amber-100 text-amber-800'
+                                    : 'bg-emerald-100 text-emerald-800'
+                                }`}>
+                                  {rec.source === 'DATABASE_MASTER_PRODUK'
+                                    ? `Master Produk (${rec.productCount || 1} item)`
+                                    : 'Database Supplier'}
                                 </span>
                               </div>
-                              <div className="text-[11px] text-neutral-500 mt-0.5 flex flex-wrap items-center gap-2">
-                                <span>PIC: <strong className="text-neutral-700">{s.picName || '-'}</strong></span>
+                              <div className="text-[11px] text-neutral-500 flex flex-wrap items-center gap-2">
+                                {rec.picName && (
+                                  <span>PIC: <strong className="text-neutral-700">{rec.picName}</strong></span>
+                                )}
+                                <span>WA: <strong className="text-neutral-700 font-mono">{rec.phone || '-'}</strong></span>
                                 <span>·</span>
-                                <span>WA: <strong className="text-neutral-700 font-mono">{s.phone || '-'}</strong></span>
+                                <span>Gmail: <strong className="text-neutral-700 font-mono">{rec.email || '-'}</strong></span>
                               </div>
                             </div>
+
                             <button
                               type="button"
-                              onClick={() => handleStartEdit(s)}
-                              className="px-2.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] font-semibold shrink-0 cursor-pointer transition-colors shadow-2xs flex items-center justify-center gap-1"
-                              title="Pilih dan edit data supplier ini langsung untuk menghindari duplikasi"
+                              onClick={() => handleSelectRecommendation(rec)}
+                              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold shrink-0 cursor-pointer transition-colors shadow-2xs flex items-center justify-center gap-1 self-end sm:self-auto"
+                              title="Pilih supplier ini untuk mengisi seluruh formulir secara otomatis"
                             >
-                              <span>Gunakan / Edit Data Ini</span>
+                              <Sparkles className="w-3 h-3 text-amber-300" />
+                              <span>Pilih &amp; Isi Otomatis</span>
                             </button>
                           </div>
                         ))}
                       </div>
-                      <div className="text-[11px] text-amber-800 italic">
-                        Tip: Gunakan data yang sudah ada di atas jika nama supplier sudah pernah didaftarkan.
+                      <div className="text-[10px] text-blue-700 italic">
+                        Tip: Memilih data rekomendasi di atas akan mengotomatiskan seluruh kontak dan mencegah duplikasi data.
                       </div>
                     </div>
                   )}
@@ -854,16 +1031,19 @@ export const SupplierListModal: React.FC<SupplierListModalProps> = ({
               <div className="flex justify-end gap-2 pt-2 border-t border-neutral-200">
                 <button
                   type="button"
+                  disabled={isSaving}
                   onClick={() => setIsCreating(false)}
-                  className="px-3.5 py-1.5 text-xs border border-neutral-300 rounded text-neutral-700 hover:bg-neutral-50"
+                  className="px-3.5 py-1.5 text-xs border border-neutral-300 rounded text-neutral-700 hover:bg-neutral-50 cursor-pointer disabled:opacity-50"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 text-xs font-semibold bg-neutral-900 hover:bg-neutral-800 text-white rounded"
+                  disabled={isSaving}
+                  className="px-4 py-1.5 text-xs font-semibold bg-neutral-900 hover:bg-neutral-800 text-white rounded flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors shadow-2xs"
                 >
-                  Simpan Supplier
+                  {isSaving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{isSaving ? 'Menyimpan ke Master...' : editingSup ? 'Simpan Perubahan' : 'Simpan ke Database Master'}</span>
                 </button>
               </div>
             </form>

@@ -235,6 +235,79 @@ export const ReturnFormModal: React.FC<ReturnFormModalProps> = ({
     }
   };
 
+  const [activeDropdown, setActiveDropdown] = useState<'BARCODE' | 'NAME' | 'SKU' | null>(null);
+
+  // Fungsi saat memilih master product dari rekomendasi/autocomplete
+  const handleSelectMasterProduct = (found: MasterProduct) => {
+    setMatchedMaster(found);
+    if (found.barcode) setBarcode(found.barcode);
+    setItemName(found.itemName);
+    setSku(found.sku || `SKU-${found.barcode.slice(-6)}`);
+
+    // Match category/department if available
+    if (found.department) {
+      const foundCategory = CATEGORIES.find(
+        (c) => c.toLowerCase() === found.department.toLowerCase()
+      );
+      setCategory(foundCategory || found.department);
+    }
+
+    if (found.unit) {
+      setUnit(found.unit);
+    }
+
+    // Check if supplier exists in existing supplier list
+    const matchedSup = suppliers.find(
+      (s) => s.name.trim().toLowerCase() === found.supplierName.trim().toLowerCase()
+    );
+
+    if (matchedSup) {
+      setSelectedSupplierId(matchedSup.id);
+      setIsAddingNewSupplier(false);
+    } else {
+      // Prepopulate inline new supplier fields
+      setIsAddingNewSupplier(true);
+      setNewSupName(found.supplierName);
+      setNewSupPhone(found.supplierPhone || '');
+      setNewSupEmail(found.supplierEmail || '');
+      setNewSupPic('PIC Rekanan');
+    }
+
+    setActiveDropdown(null);
+  };
+
+  // 1. Dynamic search by Barcode
+  const barcodeSuggestions = React.useMemo(() => {
+    const q = barcode.trim().toLowerCase();
+    if (q.length < 3 || matchedMaster?.barcode === barcode) return [];
+    return masterProducts
+      .filter((p) => p.barcode && p.barcode.toLowerCase().includes(q))
+      .slice(0, 6);
+  }, [barcode, masterProducts, matchedMaster]);
+
+  // 2. Dynamic search by Product Name
+  const nameSuggestions = React.useMemo(() => {
+    const q = itemName.trim().toLowerCase();
+    if (q.length < 2 || (matchedMaster && matchedMaster.itemName.toLowerCase() === q)) return [];
+    const words = q.split(/\s+/).filter((w) => w.length > 1);
+    return masterProducts
+      .filter((p) => {
+        if (!p.itemName) return false;
+        const pName = p.itemName.toLowerCase();
+        return pName.includes(q) || words.some((w) => pName.includes(w));
+      })
+      .slice(0, 6);
+  }, [itemName, masterProducts, matchedMaster]);
+
+  // 3. Dynamic search by SKU
+  const skuSuggestions = React.useMemo(() => {
+    const q = sku.trim().toLowerCase();
+    if (q.length < 2 || (matchedMaster && matchedMaster.sku?.toLowerCase() === q)) return [];
+    return masterProducts
+      .filter((p) => p.sku && p.sku.toLowerCase().includes(q))
+      .slice(0, 6);
+  }, [sku, masterProducts, matchedMaster]);
+
   // Master product lookup helper by Barcode or SKU
   const performMasterLookup = (searchQuery: string) => {
     const clean = searchQuery.trim().toLowerCase();
@@ -249,39 +322,7 @@ export const ReturnFormModal: React.FC<ReturnFormModalProps> = ({
         (p.sku && p.sku.trim().toLowerCase() === clean)
     );
     if (found) {
-      setMatchedMaster(found);
-      if (found.barcode) setBarcode(found.barcode);
-      setItemName(found.itemName);
-      setSku(found.sku || `SKU-${found.barcode.slice(-6)}`);
-
-      // Match category/department if available
-      if (found.department) {
-        const foundCategory = CATEGORIES.find(
-          (c) => c.toLowerCase() === found.department.toLowerCase()
-        );
-        setCategory(foundCategory || found.department);
-      }
-
-      if (found.unit) {
-        setUnit(found.unit);
-      }
-
-      // Check if supplier exists in existing supplier list
-      const matchedSup = suppliers.find(
-        (s) => s.name.trim().toLowerCase() === found.supplierName.trim().toLowerCase()
-      );
-
-      if (matchedSup) {
-        setSelectedSupplierId(matchedSup.id);
-        setIsAddingNewSupplier(false);
-      } else {
-        // Prepopulate inline new supplier fields
-        setIsAddingNewSupplier(true);
-        setNewSupName(found.supplierName);
-        setNewSupPhone(found.supplierPhone || '');
-        setNewSupEmail(found.supplierEmail || '');
-        setNewSupPic('PIC Rekanan');
-      }
+      handleSelectMasterProduct(found);
     } else {
       setMatchedMaster(null);
     }
@@ -603,14 +644,51 @@ export const ReturnFormModal: React.FC<ReturnFormModalProps> = ({
               </div>
             </div>
 
-            <input
-              type="text"
-              required
-              placeholder="Contoh: 8992753210118 atau RET-2026-001"
-              value={barcode}
-              onChange={(e) => handleBarcodeChange(e.target.value)}
-              className="w-full px-3 py-2 text-sm font-mono border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900 bg-white"
-            />
+            <div className="relative">
+              <input
+                type="text"
+                required
+                placeholder="Contoh: 8992753210118 atau RET-2026-001"
+                value={barcode}
+                onFocus={() => setActiveDropdown('BARCODE')}
+                onChange={(e) => {
+                  handleBarcodeChange(e.target.value);
+                  setActiveDropdown('BARCODE');
+                }}
+                className="w-full px-3 py-2 text-sm font-mono border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900 bg-white"
+              />
+
+              {activeDropdown === 'BARCODE' && barcodeSuggestions.length > 0 && (
+                <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-neutral-200 rounded-lg shadow-xl z-50 max-h-56 overflow-y-auto divide-y divide-neutral-100 animate-in fade-in duration-100">
+                  <div className="px-3 py-1.5 bg-neutral-50 text-[10px] font-bold text-neutral-500 uppercase tracking-wider flex items-center justify-between">
+                    <span>Saran Barcode Master ({barcodeSuggestions.length})</span>
+                    <button type="button" onClick={() => setActiveDropdown(null)} className="text-neutral-400 hover:text-neutral-700 cursor-pointer">✕</button>
+                  </div>
+                  {barcodeSuggestions.map((p) => (
+                    <div
+                      key={p.id}
+                      onMouseDown={() => handleSelectMasterProduct(p)}
+                      className="p-2.5 hover:bg-blue-50 cursor-pointer transition-colors flex items-center justify-between gap-2"
+                    >
+                      <div className="text-left">
+                        <div className="text-xs font-bold text-neutral-900">{p.itemName}</div>
+                        <div className="text-[11px] text-neutral-500 font-mono flex items-center gap-2 mt-0.5">
+                          <span>Barcode: <strong className="text-neutral-700">{p.barcode}</strong></span>
+                          <span>·</span>
+                          <span>SKU: {p.sku || '-'}</span>
+                        </div>
+                        <div className="text-[10px] text-neutral-500 mt-0.5">
+                          Supplier: <strong className="text-neutral-700">{p.supplierName}</strong> · Dept: {p.department}
+                        </div>
+                      </div>
+                      <span className="text-[10px] px-2 py-0.5 bg-blue-100 text-blue-800 rounded font-semibold shrink-0">
+                        Pilih
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
             {!matchedMaster && barcode.trim().length >= 4 && !editingItem && (
               <div className="flex items-center justify-between pt-1 text-[11px] text-amber-700 bg-amber-50/80 p-2 rounded border border-amber-200">
@@ -633,21 +711,63 @@ export const ReturnFormModal: React.FC<ReturnFormModalProps> = ({
 
           {/* General Item Info */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="md:col-span-2">
+            <div className="md:col-span-2 relative">
               <label className="block text-xs font-semibold text-neutral-700 mb-1">
                 Nama Barang / Produk <span className="text-rose-500">*</span>
               </label>
               <input
                 type="text"
                 required
-                placeholder="Contoh: Indomie Goreng Spesial 85g (Dus Basah)"
+                placeholder="Ketik nama produk (cth: Indomie, Roma, Sunlight...)"
                 value={itemName}
-                onChange={(e) => setItemName(e.target.value)}
+                onFocus={() => setActiveDropdown('NAME')}
+                onChange={(e) => {
+                  setItemName(e.target.value);
+                  setActiveDropdown('NAME');
+                }}
                 className="w-full px-3 py-2 text-sm border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900"
               />
+
+              {activeDropdown === 'NAME' && nameSuggestions.length > 0 && (
+                <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-neutral-200 rounded-lg shadow-xl z-50 max-h-56 overflow-y-auto divide-y divide-neutral-100 animate-in fade-in duration-100">
+                  <div className="px-3 py-1.5 bg-neutral-50 text-[10px] font-bold text-neutral-500 uppercase tracking-wider flex items-center justify-between">
+                    <span>Ditemukan di Database Master ({nameSuggestions.length})</span>
+                    <button type="button" onClick={() => setActiveDropdown(null)} className="text-neutral-400 hover:text-neutral-700 cursor-pointer">✕</button>
+                  </div>
+                  {nameSuggestions.map((p) => (
+                    <div
+                      key={p.id}
+                      onMouseDown={() => handleSelectMasterProduct(p)}
+                      className="p-2.5 hover:bg-blue-50 cursor-pointer transition-colors flex items-center justify-between gap-2"
+                    >
+                      <div className="text-left">
+                        <div className="text-xs font-bold text-neutral-900 flex items-center gap-1.5 flex-wrap">
+                          <span>{p.itemName}</span>
+                          <span className={`text-[9px] px-1.5 py-0.2 rounded font-semibold ${
+                            p.procurementType === 'CONSIGNMENT' ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'
+                          }`}>
+                            {p.procurementType === 'CONSIGNMENT' ? 'Konsinyasi' : 'Outright'}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-neutral-500 font-mono flex items-center gap-2 mt-0.5">
+                          <span>Barcode: <strong className="text-neutral-700">{p.barcode}</strong></span>
+                          <span>·</span>
+                          <span>SKU: {p.sku || '-'}</span>
+                        </div>
+                        <div className="text-[10px] text-neutral-500 mt-0.5">
+                          Supplier: <strong className="text-neutral-700">{p.supplierName}</strong> · Dept: {p.department}
+                        </div>
+                      </div>
+                      <span className="text-[10px] px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded font-semibold shrink-0 shadow-2xs">
+                        Gunakan
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
-            <div>
+            <div className="relative">
               <label className="block text-xs font-semibold text-neutral-700 mb-1">
                 Kode SKU (Nomor SKU)
               </label>
@@ -655,9 +775,42 @@ export const ReturnFormModal: React.FC<ReturnFormModalProps> = ({
                 type="text"
                 placeholder="Contoh: IDM-GOR-85G"
                 value={sku}
-                onChange={(e) => setSku(e.target.value)}
+                onFocus={() => setActiveDropdown('SKU')}
+                onChange={(e) => {
+                  setSku(e.target.value);
+                  setActiveDropdown('SKU');
+                }}
                 className="w-full px-3 py-2 text-sm font-mono border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900"
               />
+
+              {activeDropdown === 'SKU' && skuSuggestions.length > 0 && (
+                <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-neutral-200 rounded-lg shadow-xl z-50 max-h-56 overflow-y-auto divide-y divide-neutral-100 animate-in fade-in duration-100">
+                  <div className="px-3 py-1.5 bg-neutral-50 text-[10px] font-bold text-neutral-500 uppercase tracking-wider flex items-center justify-between">
+                    <span>Saran SKU Master ({skuSuggestions.length})</span>
+                    <button type="button" onClick={() => setActiveDropdown(null)} className="text-neutral-400 hover:text-neutral-700 cursor-pointer">✕</button>
+                  </div>
+                  {skuSuggestions.map((p) => (
+                    <div
+                      key={p.id}
+                      onMouseDown={() => handleSelectMasterProduct(p)}
+                      className="p-2.5 hover:bg-blue-50 cursor-pointer transition-colors flex items-center justify-between gap-2"
+                    >
+                      <div className="text-left">
+                        <div className="text-xs font-bold text-neutral-900">{p.itemName}</div>
+                        <div className="text-[11px] text-neutral-500 font-mono mt-0.5">
+                          SKU: <strong className="text-neutral-800">{p.sku}</strong> · Barcode: {p.barcode}
+                        </div>
+                        <div className="text-[10px] text-neutral-500">
+                          Supplier: {p.supplierName}
+                        </div>
+                      </div>
+                      <span className="text-[10px] px-2 py-0.5 bg-blue-100 text-blue-800 rounded font-semibold shrink-0">
+                        Pilih
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div>

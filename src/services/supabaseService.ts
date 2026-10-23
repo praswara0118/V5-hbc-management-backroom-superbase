@@ -79,6 +79,9 @@ export function returnItemToSupabase(item: ReturnItem) {
 }
 
 export function supabaseToReturnItem(row: any): ReturnItem {
+  const history = Array.isArray(row.warning_history) ? row.warning_history : [];
+  const finalLog = history.find((w: any) => w.tone === 'final');
+
   const item: ReturnItem = {
     id: row.id,
     barcode: row.barcode,
@@ -101,8 +104,9 @@ export function supabaseToReturnItem(row: any): ReturnItem {
     estimatedValue: Number(row.estimated_value) || 0,
     pickedUpDate: row.picked_up_date || undefined,
     pickedUpBy: row.picked_up_by || undefined,
-    warningHistory: Array.isArray(row.warning_history) ? row.warning_history : [],
+    warningHistory: history,
     photoUrl: row.photo_url || undefined,
+    finalWarningSentAt: row.final_warning_sent_at || finalLog?.timestamp || undefined,
     createdAt: row.created_at || new Date().toISOString(),
     updatedAt: row.updated_at || new Date().toISOString(),
   };
@@ -215,42 +219,9 @@ export async function seedInitialSupabaseData(): Promise<void> {
   try {
     const hasSeededLocal = localStorage.getItem('returku_supabase_seeded') === 'true';
     if (hasSeededLocal) return;
-
-    // Check if suppliers table has records
-    const { count, error } = await client
-      .from('suppliers')
-      .select('*', { count: 'exact', head: true });
-
-    if (error) {
-      console.warn('Cannot check suppliers table (might need schema setup):', error);
-      return;
-    }
-
-    if (count === 0 || count === null) {
-      console.log('Seeding initial data to Supabase...');
-      // 1. Suppliers
-      await client.from('suppliers').upsert(INITIAL_SUPPLIERS.map(supplierToSupabase));
-
-      // 2. Return Items
-      await client.from('return_items').upsert(INITIAL_RETURN_ITEMS.map(returnItemToSupabase));
-
-      // 3. Master Products
-      await client.from('master_products').upsert(INITIAL_MASTER_PRODUCTS.map(masterProductToSupabase));
-
-      // 4. Storage Locations
-      await client.from('storage_locations').upsert(INITIAL_STORAGE_LOCATIONS.map(storageLocationToSupabase));
-
-      // 5. System metadata
-      await client.from('system_metadata').upsert({
-        key: 'initial_seed',
-        value: { seeded_at: new Date().toISOString(), version: '2.0-supabase' },
-        updated_at: new Date().toISOString(),
-      });
-    }
-
     localStorage.setItem('returku_supabase_seeded', 'true');
   } catch (err) {
-    console.warn('Supabase initial seeding error:', err);
+    console.warn('Supabase initial seed check:', err);
   }
 }
 

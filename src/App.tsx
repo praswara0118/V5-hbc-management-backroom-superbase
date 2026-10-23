@@ -199,14 +199,48 @@ export default function App() {
 
         if (!isMounted) return;
 
+        // Daftar ID data contoh bawaan yang dihapus permanen agar aplikasi bersih untuk produksi
+        const DUMMY_ITEM_IDS = new Set([
+          'ret-1001',
+          'ret-1002',
+          'ret-1003',
+          'ret-1004',
+          'ret-1005',
+          'ret-1006',
+        ]);
+        const DUMMY_SUP_IDS = new Set([
+          'sup-indofood',
+          'sup-unilever',
+          'sup-mayora',
+          'sup-wings',
+          'sup-kalbe',
+          'sup-paragon',
+          'sup-haleon',
+          'sup-otsuka',
+        ]);
+
         if (cachedMaster && Array.isArray(cachedMaster) && cachedMaster.length > 0) {
           setMasterProducts(cachedMaster);
         }
-        if (cachedItems && Array.isArray(cachedItems) && cachedItems.length > 0) {
-          setItems(cachedItems);
+        if (cachedItems && Array.isArray(cachedItems)) {
+          const cleanItems = cachedItems.filter((i) => !DUMMY_ITEM_IDS.has(i.id));
+          setItems(cleanItems);
+          if (cleanItems.length !== cachedItems.length) {
+            setCachedData(STORAGE_KEY_ITEMS, cleanItems).catch(() => {});
+            try {
+              localStorage.setItem(STORAGE_KEY_ITEMS, JSON.stringify(cleanItems));
+            } catch {}
+          }
         }
-        if (cachedSuppliers && Array.isArray(cachedSuppliers) && cachedSuppliers.length > 0) {
-          setSuppliers(cachedSuppliers);
+        if (cachedSuppliers && Array.isArray(cachedSuppliers)) {
+          const cleanSuppliers = cachedSuppliers.filter((s) => !DUMMY_SUP_IDS.has(s.id));
+          setSuppliers(cleanSuppliers);
+          if (cleanSuppliers.length !== cachedSuppliers.length) {
+            setCachedData(STORAGE_KEY_SUPPLIERS, cleanSuppliers).catch(() => {});
+            try {
+              localStorage.setItem(STORAGE_KEY_SUPPLIERS, JSON.stringify(cleanSuppliers));
+            } catch {}
+          }
         }
         if (cachedStorage && Array.isArray(cachedStorage) && cachedStorage.length > 0) {
           setStorageLocations(cachedStorage);
@@ -838,13 +872,14 @@ export default function App() {
   };
 
   // Handler: Log warning -> Synced to database
-  const handleLogWarning = async (itemId: string, log: WarningLog) => {
+  const handleLogWarning = async (itemId: string, log: WarningLog, finalWarningSentAt?: string) => {
     const targetItem = items.find((i) => i.id === itemId);
     if (!targetItem) return;
 
     const updatedItem: ReturnItem = {
       ...targetItem,
       warningHistory: [log, ...(targetItem.warningHistory || [])],
+      finalWarningSentAt: finalWarningSentAt || targetItem.finalWarningSentAt,
       updatedAt: new Date().toISOString(),
     };
 
@@ -1980,6 +2015,7 @@ export default function App() {
         onDeleteSupplier={handleDeleteSupplier}
         onBatchDeleteSuppliers={handleBatchDeleteSuppliers}
         onFilterBySupplier={(supId) => setSelectedSupplierFilter(supId)}
+        masterProducts={masterProducts}
       />
 
       {/* 6. Print Slip Modal */}

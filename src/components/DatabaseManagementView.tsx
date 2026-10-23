@@ -114,6 +114,17 @@ export const DatabaseManagementView: React.FC<DatabaseManagementViewProps> = ({
   const [copiedGrantSql, setCopiedGrantSql] = useState(false);
   const [isConfigExpanded, setIsConfigExpanded] = useState(false);
 
+  // Uji koneksi Supabase otomatis saat halaman dibuka tanpa input manual
+  useEffect(() => {
+    if (isSupabaseConfigured() && !supabaseTestResult) {
+      testSupabaseConnection()
+        .then((res) => {
+          setSupabaseTestResult(res);
+        })
+        .catch(() => {});
+    }
+  }, []);
+
   // Simpan kredensial Supabase ke memori browser & segarkan koneksi
   const handleSaveSupabaseConfig = async () => {
     try {
@@ -918,15 +929,23 @@ export const DatabaseManagementView: React.FC<DatabaseManagementViewProps> = ({
                   Database Utama: Supabase (PostgreSQL)
                 </h2>
                 <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 ${
-                  cloudProvider === 'supabase' && isCloudConnected
+                  (cloudProvider === 'supabase' && isCloudConnected) || supabaseTestResult?.success
                     ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    : isSupabaseConfigured()
+                    ? 'bg-blue-100 text-blue-800 border border-blue-300'
                     : 'bg-amber-100 text-amber-800 border border-amber-300'
                 }`}>
                   <span className={`w-2 h-2 rounded-full ${
-                    cloudProvider === 'supabase' && isCloudConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+                    (cloudProvider === 'supabase' && isCloudConnected) || supabaseTestResult?.success
+                      ? 'bg-emerald-500 animate-pulse'
+                      : isSupabaseConfigured()
+                      ? 'bg-blue-500'
+                      : 'bg-amber-500'
                   }`} />
-                  {cloudProvider === 'supabase' && isCloudConnected
-                    ? 'PostgreSQL Realtime Terkoneksi'
+                  {(cloudProvider === 'supabase' && isCloudConnected) || supabaseTestResult?.success
+                    ? 'PostgreSQL Realtime Terkoneksi (Otomatis)'
+                    : isSupabaseConfigured()
+                    ? 'Koneksi Supabase Otomatis Aktif'
                     : 'Menunggu Konfigurasi Supabase'}
                 </span>
               </div>

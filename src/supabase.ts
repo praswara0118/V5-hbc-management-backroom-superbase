@@ -1,7 +1,12 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
+// Default active Supabase credentials for this project
+const DEFAULT_PROJECT_SUPABASE_URL = 'https://rozggiveercxlaskpwvl.supabase.co';
+const DEFAULT_PROJECT_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJvemdnaXZlZXJjeGxhc2twd3ZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI0NDQ1NzYsImV4cCI6MjEwODAyMDU3Nn0.HezGHajGxPHIHKo3KzD7b41YbdJCf8eArnYrOeFTsns';
+
 // Environment variables or localStorage fallback for easy testing in AI Studio
-const getEnvOrStorage = (envKey: string, storageKey: string): string => {
+const getEnvOrStorage = (envKey: string, storageKey: string, fallback = ''): string => {
   try {
     const envVal = (import.meta as any).env?.[envKey];
     if (envVal && typeof envVal === 'string' && envVal.trim()) {
@@ -11,13 +16,27 @@ const getEnvOrStorage = (envKey: string, storageKey: string): string => {
     if (stored && typeof stored === 'string' && stored.trim()) {
       return stored.trim();
     }
+    if (fallback && typeof fallback === 'string' && fallback.trim()) {
+      return fallback.trim();
+    }
   } catch {}
-  return '';
+  return fallback;
 };
 
 export const getSupabaseConfig = () => {
-  const url = getEnvOrStorage('VITE_SUPABASE_URL', 'returku_supabase_url');
-  const anonKey = getEnvOrStorage('VITE_SUPABASE_ANON_KEY', 'returku_supabase_anon_key');
+  const url = getEnvOrStorage('VITE_SUPABASE_URL', 'returku_supabase_url', DEFAULT_PROJECT_SUPABASE_URL);
+  const anonKey = getEnvOrStorage('VITE_SUPABASE_ANON_KEY', 'returku_supabase_anon_key', DEFAULT_PROJECT_ANON_KEY);
+  
+  // Persist automatic credentials so other components and reload cycles have instant access
+  try {
+    if (url && !localStorage.getItem('returku_supabase_url')) {
+      localStorage.setItem('returku_supabase_url', url);
+    }
+    if (anonKey && !localStorage.getItem('returku_supabase_anon_key')) {
+      localStorage.setItem('returku_supabase_anon_key', anonKey);
+    }
+  } catch {}
+
   return { url, anonKey };
 };
 

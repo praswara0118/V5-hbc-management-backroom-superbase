@@ -14,12 +14,14 @@ export type ReturnStatus =
   | 'Sudah Diambil'
   | 'Diganti Baru';
 
+export type WarningTone = 'gentle' | 'reminder' | 'urgent' | 'final' | 'followup' | string;
+
 export interface WarningLog {
   id: string;
   timestamp: string;
   channel: 'whatsapp' | 'gmail';
   recipient: string;
-  tone: 'gentle' | 'urgent' | 'final';
+  tone: WarningTone;
   message: string;
 }
 
@@ -98,6 +100,7 @@ export interface ReturnItem {
   pickedUpBy?: string;
   warningHistory: WarningLog[];
   photoUrl?: string;
+  finalWarningSentAt?: string; // Timestamp batas waktu 2x24 jam peringatan terakhir
   createdAt: string;
   updatedAt: string;
 }

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ReturnItem } from '../types/inventory';
 import { BarcodeBadge } from './BarcodeBadge';
-import { formatIndoDate, getDaysRemaining } from '../utils/notification';
+import { formatIndoDate, getDaysRemaining, getOverdueDetail } from '../utils/notification';
 import {
   X,
   Printer,
@@ -106,17 +106,25 @@ export const ItemDetailModal: React.FC<ItemDetailModalProps> = ({
                 {item.status}
               </span>
 
-              {!isCompleted && (
-                <div className="mt-1 text-xs text-neutral-600 font-medium">
-                  {daysLeft < 0 ? (
-                    <span className="text-rose-600 font-bold">Terlambat {Math.abs(daysLeft)} hari!</span>
-                  ) : daysLeft === 0 ? (
-                    <span className="text-amber-600 font-bold">Jatuh tempo HARI INI!</span>
-                  ) : (
-                    <span>Sisa {daysLeft} hari lagi</span>
-                  )}
-                </div>
-              )}
+              {!isCompleted && (() => {
+                const overdue = getOverdueDetail(item.dueDate, item.finalWarningSentAt);
+                return (
+                  <div className="mt-1 text-xs font-medium">
+                    {overdue.isOverdue ? (
+                      <span className="text-rose-600 font-bold">{overdue.exactDurationLabel}</span>
+                    ) : overdue.isToday ? (
+                      <span className="text-amber-600 font-bold">Jatuh tempo HARI INI</span>
+                    ) : (
+                      <span className="text-neutral-600">{overdue.exactDurationLabel}</span>
+                    )}
+                    {item.finalWarningSentAt && (
+                      <div className="text-[10px] text-rose-700 font-bold mt-0.5">
+                        {overdue.isPastFinalDeadline ? '⚠️ Batas 2x24 jam telah berakhir (PA0)' : `⚠️ Sisa toleransi 2x24 jam: ${overdue.finalWarningRemainingHours} jam`}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           </div>
 
