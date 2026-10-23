@@ -25,6 +25,9 @@ import {
   AlertTriangle,
   Image as ImageIcon,
   Flame,
+  Share2,
+  Download,
+  CheckCircle2,
 } from 'lucide-react';
 
 interface WarningModalProps {
@@ -95,8 +98,122 @@ export const WarningModal: React.FC<WarningModalProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleSendWhatsApp = () => {
+  const [photoCopied, setPhotoCopied] = useState(false);
+  const [shareNotice, setShareNotice] = useState<string | null>(null);
+
+  // Convert base64 or URL into File object for Web Share API
+  const getPhotoFile = async (photoUrl: string, fileName: string): Promise<File | null> => {
+    try {
+      const res = await fetch(photoUrl);
+      const blob = await res.blob();
+      return new File([blob], fileName, { type: blob.type || 'image/jpeg' });
+    } catch (e) {
+      console.warn('Gagal mengubah foto menjadi file:', e);
+      return null;
+    }
+  };
+
+  // Copy image to clipboard for desktop WhatsApp Web (Ctrl+V)
+  const handleCopyPhotoToClipboard = async () => {
+    if (!item?.photoUrl) return;
+    try {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.src = item.photoUrl;
+      await new Promise((resolve, reject) => {
+        img.onload = () => resolve(true);
+        img.onerror = reject;
+      });
+
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.drawImage(img, 0, 0);
+
+      const blob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob((b) => resolve(b), 'image/png')
+      );
+
+      if (blob && navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+        await navigator.clipboard.write([
+          new ClipboardItem({ 'image/png': blob }),
+        ]);
+        setPhotoCopied(true);
+        setTimeout(() => setPhotoCopied(false), 3000);
+        return true;
+      }
+    } catch (err) {
+      console.warn('Gagal menyalin foto ke clipboard:', err);
+    }
+    return false;
+  };
+
+  // Download photo file helper
+  const handleDownloadPhoto = () => {
+    if (!item?.photoUrl) return;
+    const a = document.createElement('a');
+    a.href = item.photoUrl;
+    a.download = `Retur-${(item.itemName || 'Barang').replace(/[^a-zA-Z0-9]/g, '_')}-${item.barcode}.jpg`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  const handleSendWhatsApp = async () => {
     if (!item || !item.supplierPhone) return;
+
+    // Check if Web Share API with files is available (Supported on modern Android & iOS)
+    if (item.photoUrl && navigator.share) {
+      try {
+        const photoFile = await getPhotoFile(
+          item.photoUrl,
+          `Retur-${item.barcode}.jpg`
+        );
+        if (
+          photoFile &&
+          navigator.canShare &&
+          navigator.canShare({ files: [photoFile] })
+        ) {
+          await navigator.share({
+            title: `Peringatan Retur HBC - ${item.itemName}`,
+            text: editableMessage,
+            files: [photoFile],
+          });
+
+          // Log warning
+          const newFinalTimestamp =
+            tone === 'final'
+              ? item.finalWarningSentAt || new Date().toISOString()
+              : item.finalWarningSentAt;
+
+          const newLog: WarningLog = {
+            id: `log-${Date.now()}`,
+            timestamp: new Date().toISOString(),
+            channel: 'whatsapp',
+            recipient: item.supplierPhone,
+            tone: tone,
+            message: `Peringatan + Foto (${getToneLabel(tone)}) dikirim via WhatsApp Share ke ${item.supplierPhone}`,
+          };
+          onLogWarning(item.id, newLog, newFinalTimestamp);
+          return;
+        }
+      } catch (err: any) {
+        // If user cancelled share sheet, do nothing
+        if (err?.name === 'AbortError') return;
+        console.warn('Web Share API error, fallback to WhatsApp URL:', err);
+      }
+    }
+
+    // Fallback: If image exists, attempt auto-copying to clipboard so user can press Ctrl+V in WhatsApp Web
+    if (item.photoUrl) {
+      handleCopyPhotoToClipboard();
+      setShareNotice(
+        '📸 Foto produk telah disalin ke clipboard! Tekan Ctrl+V (Tempel) di chat WhatsApp untuk mengirim foto bersamaan.'
+      );
+      setTimeout(() => setShareNotice(null), 8000);
+    }
 
     const waUrl = getWhatsAppUrl(item.supplierPhone, editableMessage);
     window.open(waUrl, '_blank', 'noopener,noreferrer');
@@ -392,30 +509,78 @@ export const WarningModal: React.FC<WarningModalProps> = ({
             </div>
           </div>
 
-          {/* Photo Attachment Info */}
+          {/* Photo Attachment Info & Direct Sharing Controls */}
           {item.photoUrl && (
-            <div className="p-3 bg-neutral-50 border border-neutral-200 rounded-lg flex items-center justify-between gap-3 text-xs">
-              <div className="flex items-center gap-2">
-                <ImageIcon className="w-4 h-4 text-emerald-600 shrink-0" />
-                <div>
-                  <span className="font-semibold text-neutral-800">Foto Fisik Barang Terdata:</span>
-                  <span className="text-neutral-500 ml-1">
-                    {item.photoUrl.startsWith('http')
-                      ? 'Link foto otomatis disertakan pada teks pesan WhatsApp & Gmail'
-                      : 'Foto fisik siap diverifikasi langsung di gudang'}
-                  </span>
+            <div className="p-3 bg-emerald-50/80 border border-emerald-300 rounded-xl space-y-2.5 text-xs animate-in fade-in">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <img
+                    src={item.photoUrl}
+                    alt={item.itemName}
+                    className="w-12 h-12 object-cover rounded-lg border border-emerald-300 shadow-2xs cursor-pointer hover:scale-105 transition-transform"
+                    onClick={() => {
+                      const w = window.open('');
+                      w?.document.write(`<img src="${item.photoUrl}" style="max-width:100%;height:auto;margin:auto;display:block;" />`);
+                    }}
+                    title="Klik untuk melihat foto ukuran penuh"
+                  />
+                  <div>
+                    <div className="font-bold text-emerald-950 flex items-center gap-1.5">
+                      <ImageIcon className="w-4 h-4 text-emerald-700 shrink-0" />
+                      <span>Foto Bukti Fisik Barang Tersedia</span>
+                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-200 text-emerald-900 font-semibold">
+                        Ikut Terkirim
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-emerald-800 mt-0.5">
+                      Di HP: otomatis dilampirkan via WhatsApp Share. Di Laptop: tekan tombol salin foto lalu tempel (Ctrl+V) di chat WhatsApp.
+                    </p>
+                  </div>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const w = window.open('');
+                    w?.document.write(`<img src="${item.photoUrl}" style="max-width:100%;height:auto;margin:auto;display:block;" />`);
+                  }}
+                  className="text-[11px] text-emerald-800 hover:text-emerald-950 hover:underline font-bold shrink-0 cursor-pointer"
+                >
+                  Lihat Foto
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  const w = window.open('');
-                  w?.document.write(`<img src="${item.photoUrl}" style="max-width:100%;height:auto;margin:auto;display:block;" />`);
-                }}
-                className="text-[11px] text-emerald-700 hover:underline font-semibold shrink-0 cursor-pointer"
-              >
-                Lihat Foto
-              </button>
+
+              {/* Quick Photo Actions */}
+              <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-emerald-200/70">
+                <button
+                  type="button"
+                  onClick={handleCopyPhotoToClipboard}
+                  className="px-2.5 py-1 bg-white hover:bg-emerald-100 border border-emerald-300 text-emerald-900 rounded-md font-semibold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  {photoCopied ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-700" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5 text-emerald-700" />
+                  )}
+                  <span>{photoCopied ? 'Foto Disalin ke Clipboard!' : 'Salin Foto (Ctrl+V di WA)'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleDownloadPhoto}
+                  className="px-2.5 py-1 bg-white hover:bg-emerald-100 border border-emerald-300 text-emerald-900 rounded-md font-semibold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5 text-emerald-700" />
+                  <span>Unduh Foto Barang</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {shareNotice && (
+            <div className="p-3 bg-blue-50 border border-blue-300 rounded-lg text-xs text-blue-900 flex items-center gap-2 animate-in fade-in">
+              <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />
+              <span>{shareNotice}</span>
             </div>
           )}
 
@@ -505,7 +670,7 @@ export const WarningModal: React.FC<WarningModalProps> = ({
               }`}
             >
               <MessageSquare className="w-4 h-4" />
-              <span>Kirim via WhatsApp</span>
+              <span>{item.photoUrl ? 'Kirim via WhatsApp (+ Foto)' : 'Kirim via WhatsApp'}</span>
               <ExternalLink className="w-3.5 h-3.5 opacity-80" />
             </button>
 

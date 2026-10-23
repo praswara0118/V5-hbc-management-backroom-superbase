@@ -7,6 +7,7 @@ import {
   MasterProduct,
   StorageLocation,
   AppNavigationMode,
+  PickupInfo,
 } from './types/inventory';
 import {
   INITIAL_SUPPLIERS,
@@ -44,7 +45,7 @@ import {
   getActiveProvider,
   DatabaseProvider,
 } from './services/databaseService';
-import { getCachedData, setCachedData } from './services/localCache';
+import { getCachedData, setCachedData, savePickupInfoLocally, getLocalPickupInfo } from './services/localCache';
 import {
   Camera,
   Plus,
@@ -223,7 +224,15 @@ export default function App() {
           setMasterProducts(cachedMaster);
         }
         if (cachedItems && Array.isArray(cachedItems)) {
-          const cleanItems = cachedItems.filter((i) => !DUMMY_ITEM_IDS.has(i.id));
+          const cleanItems = cachedItems
+            .filter((i) => !DUMMY_ITEM_IDS.has(i.id))
+            .map((item) => {
+              if (item.status === 'Sudah Diambil' && !item.pickupInfo) {
+                const local = getLocalPickupInfo(item.id);
+                if (local) return { ...item, pickupInfo: local };
+              }
+              return item;
+            });
           setItems(cleanItems);
           if (cleanItems.length !== cachedItems.length) {
             setCachedData(STORAGE_KEY_ITEMS, cleanItems).catch(() => {});
@@ -850,24 +859,46 @@ export default function App() {
   };
 
   // Handler: Mark item as picked up -> Synced to database
-  const handleMarkAsPickedUp = async (itemId: string, pickedUpBy: string) => {
+  const handleMarkAsPickedUp = async (itemId: string, pickedUpBy: string, pickupInfo?: PickupInfo) => {
     const targetItem = items.find((i) => i.id === itemId);
     if (!targetItem) return;
+
+    const resolvedPickupInfo: PickupInfo = pickupInfo || {
+      receiverName: pickedUpBy,
+      timestamp: new Date().toISOString(),
+    };
 
     const updatedItem: ReturnItem = {
       ...targetItem,
       status: 'Sudah Diambil',
       pickedUpDate: new Date().toISOString().split('T')[0],
       pickedUpBy: pickedUpBy,
+      pickupInfo: resolvedPickupInfo,
       updatedAt: new Date().toISOString(),
     };
 
+    // Save pickup info to persistent local storage immediately
+    savePickupInfoLocally(itemId, resolvedPickupInfo);
+
+    // 1. Immediately update items state and offline cache
+    setItems((prev) => {
+      const updated = prev.map((i) => (i.id === itemId ? updatedItem : i));
+      setCachedData(STORAGE_KEY_ITEMS, updated).catch(() => {});
+      try {
+        localStorage.setItem(STORAGE_KEY_ITEMS, JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+    // 2. CRITICAL: Immediately update activeItem so open modal updates with photo and info without closing
+    setActiveItem((curr) => (curr && curr.id === itemId ? updatedItem : curr));
+
     try {
       await saveReturnItem(updatedItem);
-      setItems((prev) => prev.map((i) => (i.id === itemId ? updatedItem : i)));
-      showAlert('Status barang berhasil diperbarui: Sudah Diambil.');
+      showAlert('✓ Status barang berhasil diperbarui: Sudah Diambil.');
     } catch (err) {
-      console.error(err);
+      console.warn('Saved in local cache, database will sync:', err);
+      showAlert('✓ Status barang tersimpan di perangkat.');
     }
   };
 
@@ -998,7 +1029,7 @@ export default function App() {
               <div className="min-w-0">
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <span className="text-xs sm:text-base font-bold tracking-tight text-neutral-900 leading-tight truncate">
-                    HBC Backroom Management
+                    HBC Backroom @ 2026
                   </span>
                 </div>
                 <div className="text-[10px] sm:text-[11px] text-neutral-500 font-medium truncate">
@@ -1917,7 +1948,7 @@ export default function App() {
       <footer className="bg-white border-t border-neutral-200 py-4 text-center text-xs text-neutral-500 pb-28">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
           <div>
-            HBC Backroom Management © 2026 — AEON Health &amp; Beauty Care Logistik Retur Gudang
+            HBC Backroom @ 2026 — AEON Health &amp; Beauty Care Logistik Retur Gudang
           </div>
           <div className="flex items-center gap-4 text-[11px]">
             <span>Database Supabase (PostgreSQL) Realtime &amp; XLSX</span>

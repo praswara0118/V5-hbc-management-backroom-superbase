@@ -1,6 +1,6 @@
 {
-  "name": "HBC Backroom Management © 2026 - AEON Health & Beauty",
-  "description": "Sistem HBC Backroom Management, pendataan barang return masuk per-supplier, pelacakan tenggat waktu, database master produk Consignment & Outright, dan pemetaan lokasi rak penyimpanan.",
+  "name": "HBC Backroom @ 2026",
+  "description": "Sistem HBC Backroom @ 2026, pendataan barang return masuk per-supplier, pelacakan tenggat waktu, database master produk Consignment & Outright, dan pemetaan lokasi rak penyimpanan.",
   "requestFramePermissions": [
     "camera"
   ],

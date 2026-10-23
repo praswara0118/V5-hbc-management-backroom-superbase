@@ -13,6 +13,7 @@ import {
   INITIAL_STORAGE_LOCATIONS,
 } from '../data/seedData';
 import { calculateReturnStatus } from '../utils/notification';
+import { savePickupInfoLocally, getLocalPickupInfo } from './localCache';
 
 // =========================================================================
 // DATA MAPPING & ADAPTER LAYER (POSTGRESQL SNAKE_CASE <-> FRONTEND TYPES)
@@ -49,7 +50,11 @@ export function supabaseToSupplier(row: any): Supplier {
 }
 
 export function returnItemToSupabase(item: ReturnItem) {
-  return {
+  if (item.pickupInfo) {
+    savePickupInfoLocally(item.id, item.pickupInfo);
+  }
+
+  const payload: any = {
     id: item.id,
     barcode: item.barcode,
     item_name: item.itemName,
@@ -70,17 +75,34 @@ export function returnItemToSupabase(item: ReturnItem) {
     location_slot: item.locationSlot || '',
     estimated_value: Number(item.estimatedValue) || 0,
     picked_up_date: item.pickedUpDate || null,
-    picked_up_by: item.pickedUpBy || null,
+    picked_up_by: item.pickedUpBy || (item.pickupInfo?.receiverName ?? null),
     warning_history: item.warningHistory || [],
     photo_url: item.photoUrl || null,
+    pickup_info: item.pickupInfo || null,
     created_at: item.createdAt || new Date().toISOString(),
     updated_at: item.updatedAt || new Date().toISOString(),
   };
+
+  return payload;
 }
 
 export function supabaseToReturnItem(row: any): ReturnItem {
   const history = Array.isArray(row.warning_history) ? row.warning_history : [];
   const finalLog = history.find((w: any) => w.tone === 'final');
+
+  // Reconstruct pickupInfo with multi-layer fallback
+  let pickupInfo = row.pickup_info;
+  if (!pickupInfo || !pickupInfo.receiverName) {
+    const local = getLocalPickupInfo(row.id);
+    if (local && (local.receiverName || local.photoUrl)) {
+      pickupInfo = local;
+    } else if (row.picked_up_by) {
+      pickupInfo = {
+        receiverName: row.picked_up_by,
+        timestamp: row.picked_up_date || row.updated_at || new Date().toISOString(),
+      };
+    }
+  }
 
   const item: ReturnItem = {
     id: row.id,
@@ -103,7 +125,8 @@ export function supabaseToReturnItem(row: any): ReturnItem {
     locationSlot: row.location_slot || '',
     estimatedValue: Number(row.estimated_value) || 0,
     pickedUpDate: row.picked_up_date || undefined,
-    pickedUpBy: row.picked_up_by || undefined,
+    pickedUpBy: row.picked_up_by || (pickupInfo?.receiverName ?? undefined),
+    pickupInfo: pickupInfo || undefined,
     warningHistory: history,
     photoUrl: row.photo_url || undefined,
     finalWarningSentAt: row.final_warning_sent_at || finalLog?.timestamp || undefined,
@@ -595,11 +618,25 @@ export async function saveReturnItemToSupabase(item: ReturnItem): Promise<void> 
   const client = getSupabaseClient();
   if (!client) throw new Error('Supabase client not initialized');
 
+  if (item.pickupInfo) {
+    savePickupInfoLocally(item.id, item.pickupInfo);
+  }
+
   const payload = returnItemToSupabase(item);
   const { error } = await client.from('return_items').upsert(payload);
   if (error) {
-    console.error('Error saving return item to Supabase:', error);
-    throw error;
+    // If column pickup_info does not exist yet on remote table
+    if (error.message?.includes('pickup_info') || error.code === 'PGRST204') {
+      const { pickup_info, ...safePayload } = payload;
+      const res2 = await client.from('return_items').upsert(safePayload);
+      if (res2.error) {
+        console.error('Error saving return item fallback to Supabase:', res2.error);
+        throw res2.error;
+      }
+    } else {
+      console.error('Error saving return item to Supabase:', error);
+      throw error;
+    }
   }
 }
 

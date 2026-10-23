@@ -1,7 +1,7 @@
 {
-  "name": "HBC Return © 2026 - AEON Health & Beauty",
-  "short_name": "HBC Return © 2026",
-  "description": "Sistem Manajemen Barang Return Masuk & Warning Supplier AEON Health & Beauty Care (HBC) © 2026",
+  "name": "HBC Backroom @ 2026",
+  "short_name": "HBC Backroom @ 2026",
+  "description": "Sistem HBC Backroom @ 2026, Manajemen Barang Return Masuk & Lokasi Penyimpanan AEON Health & Beauty Care",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#b8126f",

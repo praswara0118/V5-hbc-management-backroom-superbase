@@ -21,7 +21,10 @@ import {
   Phone,
   Clock,
   ExternalLink,
+  Image as ImageIcon,
+  Check,
 } from 'lucide-react';
+import { formatIndoDate, getOverdueDetail } from '../utils/notification';
 
 export interface BarcodeScannerModalProps {
   isOpen: boolean;
@@ -113,7 +116,9 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     const matchedLocation = storageLocations.find(
       (loc) =>
         loc.barcode.toLowerCase() === lower ||
-        (loc.sku && loc.sku.toLowerCase() === lower)
+        (loc.sku && loc.sku.toLowerCase() === lower) ||
+        (matchedMaster?.sku && loc.sku && loc.sku.toLowerCase() === matchedMaster.sku.toLowerCase()) ||
+        (matchedItem?.sku && loc.sku && loc.sku.toLowerCase() === matchedItem.sku.toLowerCase())
     );
 
     // 4. Check supplier
@@ -324,165 +329,288 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                 </button>
               </div>
 
-              {/* 3 KOTAK INFORMASI OTOMATIS: PRODUK, SUPPLIER, DAN LOKASI */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                {/* 1. INFORMASI DETAIL PRODUK */}
-                <div className="bg-white p-4 rounded-xl border border-neutral-200 shadow-2xs space-y-2.5 flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center gap-1.5 text-xs font-bold text-neutral-900 border-b border-neutral-100 pb-2">
-                      <Package className="w-4 h-4 text-emerald-600" />
-                      <span>1. Detail Produk</span>
+              {/* 3 SEKSI INFORMASI LENGKAP: PRODUK, LOKASI & FOTO, SERTA INFORMASI RETUR */}
+              <div className="space-y-4">
+                {/* 1. INFORMASI DETAIL BARANG PENTING SAJA */}
+                <div className="bg-white p-4 rounded-xl border border-neutral-200 shadow-2xs space-y-3">
+                  <div className="flex items-center justify-between border-b border-neutral-100 pb-2">
+                    <div className="flex items-center gap-2 text-xs font-bold text-neutral-900">
+                      <Package className="w-4 h-4 text-blue-600" />
+                      <span>1. Informasi Detail Barang (Penting)</span>
                     </div>
+                    {(scannedResult.foundMaster?.procurementType || scannedResult.foundItem?.category) && (
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          scannedResult.foundMaster?.procurementType === 'CONSIGNMENT'
+                            ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                            : 'bg-blue-100 text-blue-800 border border-blue-300'
+                        }`}
+                      >
+                        {scannedResult.foundMaster?.procurementType === 'CONSIGNMENT'
+                          ? 'Konsinyasi'
+                          : 'Outright (Beli Putus)'}
+                      </span>
+                    )}
+                  </div>
 
-                    <div className="mt-2.5 space-y-1.5">
-                      <div className="font-bold text-neutral-900 text-sm leading-snug">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <div className="text-neutral-500 text-[11px]">Nama Produk:</div>
+                      <div className="font-bold text-neutral-900 text-sm mt-0.5">
                         {scannedResult.foundItem?.itemName ||
                           scannedResult.foundMaster?.itemName ||
                           'Nama Produk Belum Terdaftar'}
                       </div>
+                    </div>
 
-                      <div className="flex flex-wrap gap-1">
-                        {(scannedResult.foundMaster?.procurementType || scannedResult.foundItem?.category) && (
-                          <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                              (scannedResult.foundMaster?.procurementType === 'CONSIGNMENT')
-                                ? 'bg-amber-100 text-amber-800'
-                                : 'bg-blue-100 text-blue-800'
-                            }`}
-                          >
-                            {scannedResult.foundMaster?.procurementType === 'CONSIGNMENT'
-                              ? 'Konsinyasi'
-                              : 'Outright (Beli Putus)'}
-                          </span>
-                        )}
-
-                        <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-neutral-100 text-neutral-700">
-                          {scannedResult.foundItem?.category || scannedResult.foundMaster?.department || 'Umum'}
-                        </span>
-                      </div>
-
-                      <div className="text-[11px] text-neutral-600 space-y-1 pt-1 font-mono">
-                        <div>
-                          SKU: <strong className="text-neutral-800">{scannedResult.foundItem?.sku || scannedResult.foundMaster?.sku || '-'}</strong>
-                        </div>
-                        <div>
-                          Satuan: <strong className="text-neutral-800">{scannedResult.foundItem?.unit || scannedResult.foundMaster?.unit || 'Pcs'}</strong>
-                        </div>
+                    <div>
+                      <div className="text-neutral-500 text-[11px]">Barcode &amp; Nomor SKU:</div>
+                      <div className="font-mono text-neutral-900 mt-0.5 flex items-center gap-2 font-medium">
+                        <span>Barcode: <strong>{scannedResult.code}</strong></span>
+                        <span>·</span>
+                        <span>SKU: <strong>{scannedResult.foundItem?.sku || scannedResult.foundMaster?.sku || '-'}</strong></span>
                       </div>
                     </div>
-                  </div>
 
-                  <div className="pt-2 border-t border-neutral-100 text-[10px] text-neutral-400">
-                    Sumber: {scannedResult.foundMaster ? 'Database Master XLSX' : scannedResult.foundItem ? 'Data Retur' : 'Scan Baru'}
+                    <div>
+                      <div className="text-neutral-500 text-[11px]">Kategori / Departemen:</div>
+                      <div className="font-medium text-neutral-800 mt-0.5">
+                        {scannedResult.foundItem?.category || scannedResult.foundMaster?.department || 'Umum'} · Satuan: <strong className="font-mono">{scannedResult.foundItem?.unit || scannedResult.foundMaster?.unit || 'Pcs'}</strong>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="text-neutral-500 text-[11px]">Supplier &amp; Kontak Rekanan:</div>
+                      <div className="font-semibold text-neutral-900 mt-0.5 flex items-center justify-between gap-2">
+                        <span>
+                          {scannedResult.foundSupplier?.name ||
+                            scannedResult.foundItem?.supplierName ||
+                            scannedResult.foundMaster?.supplierName ||
+                            'Supplier Belum Ditentukan'}
+                        </span>
+                        {(scannedResult.foundSupplier?.phone || scannedResult.foundItem?.supplierPhone || scannedResult.foundMaster?.supplierPhone) && (
+                          <a
+                            href={`https://wa.me/${(scannedResult.foundSupplier?.phone || scannedResult.foundItem?.supplierPhone || scannedResult.foundMaster?.supplierPhone || '').replace(/[^0-9]/g, '')}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-emerald-700 hover:text-emerald-800 font-mono text-[11px] flex items-center gap-1 font-bold underline"
+                          >
+                            <Phone className="w-3 h-3" />
+                            <span>WA: {scannedResult.foundSupplier?.phone || scannedResult.foundItem?.supplierPhone || scannedResult.foundMaster?.supplierPhone}</span>
+                          </a>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
 
-                {/* 2. INFORMASI SUPPLIER */}
-                <div className="bg-white p-4 rounded-xl border border-neutral-200 shadow-2xs space-y-2.5 flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center gap-1.5 text-xs font-bold text-neutral-900 border-b border-neutral-100 pb-2">
-                      <Building2 className="w-4 h-4 text-blue-600" />
-                      <span>2. Detail Supplier</span>
+                {/* 2. LOKASI DAN FOTO LOKASI */}
+                <div className="bg-white p-4 rounded-xl border border-neutral-200 shadow-2xs space-y-3">
+                  <div className="flex items-center justify-between border-b border-neutral-100 pb-2">
+                    <div className="flex items-center gap-2 text-xs font-bold text-neutral-900">
+                      <MapPin className="w-4 h-4 text-rose-600" />
+                      <span>2. Lokasi Penyimpanan &amp; Foto Lokasi</span>
                     </div>
+                    {scannedResult.foundLocation ? (
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-semibold">
+                        ✓ Terdaftar di Lokasi Gudang
+                      </span>
+                    ) : (
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-neutral-100 text-neutral-600">
+                        Lokasi Belum Terdaftar
+                      </span>
+                    )}
+                  </div>
 
-                    <div className="mt-2.5 space-y-1.5">
-                      <div className="font-bold text-neutral-900 text-sm">
-                        {scannedResult.foundSupplier?.name ||
-                          scannedResult.foundItem?.supplierName ||
-                          scannedResult.foundMaster?.supplierName ||
-                          'Supplier Belum Ditentukan'}
-                      </div>
-
-                      {scannedResult.foundSupplier?.picName && (
-                        <div className="text-xs text-neutral-600">
-                          PIC: <strong className="text-neutral-800">{scannedResult.foundSupplier.picName}</strong>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2 text-xs">
+                      {scannedResult.foundLocation ? (
+                        <>
+                          <div className="bg-neutral-50 p-2.5 rounded-lg border border-neutral-200 space-y-1">
+                            <div>
+                              <span className="text-neutral-500 text-[11px]">Zona Penyimpanan: </span>
+                              <strong className="text-neutral-900">{scannedResult.foundLocation.storageZone}</strong>
+                            </div>
+                            <div>
+                              <span className="text-neutral-500 text-[11px]">Aisle &amp; Rak Simpan: </span>
+                              <strong className="text-neutral-900">{scannedResult.foundLocation.aisleRack}</strong>
+                            </div>
+                            {scannedResult.foundLocation.shelfLevel && (
+                              <div>
+                                <span className="text-neutral-500 text-[11px]">Tingkat / Level Rak: </span>
+                                <strong className="text-neutral-800">{scannedResult.foundLocation.shelfLevel}</strong>
+                              </div>
+                            )}
+                            {scannedResult.foundLocation.notes && (
+                              <div className="pt-1 text-[11px] text-neutral-600">
+                                <em>Catatan: {scannedResult.foundLocation.notes}</em>
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="p-3 bg-neutral-50 rounded-lg border border-neutral-200 text-neutral-500 text-[11px]">
+                          Belum ada catatan rak penyimpanan toko/gudang untuk barang ini.
                         </div>
                       )}
 
-                      <div className="text-xs space-y-1 pt-1">
-                        {(scannedResult.foundSupplier?.phone || scannedResult.foundItem?.supplierPhone || scannedResult.foundMaster?.supplierPhone) && (
-                          <div className="flex items-center gap-1.5 text-emerald-700 font-medium">
-                            <Phone className="w-3.5 h-3.5 shrink-0" />
-                            <a
-                              href={`https://wa.me/${(scannedResult.foundSupplier?.phone || scannedResult.foundItem?.supplierPhone || scannedResult.foundMaster?.supplierPhone || '').replace(/[^0-9]/g, '')}`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="underline hover:text-emerald-800 truncate"
-                            >
-                              WA: {scannedResult.foundSupplier?.phone || scannedResult.foundItem?.supplierPhone || scannedResult.foundMaster?.supplierPhone}
-                            </a>
-                          </div>
-                        )}
-
-                        {(scannedResult.foundSupplier?.email || scannedResult.foundItem?.supplierEmail || scannedResult.foundMaster?.supplierEmail) && (
-                          <div className="flex items-center gap-1.5 text-blue-700 text-[11px] truncate">
-                            <Mail className="w-3.5 h-3.5 shrink-0" />
-                            <span className="truncate">{scannedResult.foundSupplier?.email || scannedResult.foundItem?.supplierEmail || scannedResult.foundMaster?.supplierEmail}</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="pt-2 border-t border-neutral-100 text-[10px] text-neutral-400">
-                    Tersambung pada Data Retur / Master
-                  </div>
-                </div>
-
-                {/* 3. INFORMASI LOKASI PRODUK */}
-                <div className="bg-white p-4 rounded-xl border border-neutral-200 shadow-2xs space-y-2.5 flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center gap-1.5 text-xs font-bold text-neutral-900 border-b border-neutral-100 pb-2">
-                      <MapPin className="w-4 h-4 text-rose-600" />
-                      <span>3. Informasi Lokasi</span>
-                    </div>
-
-                    <div className="mt-2.5 space-y-2">
-                      {/* Lokasi Rak Retur (Jika ada di retur) */}
-                      {scannedResult.foundItem ? (
-                        <div className="bg-rose-50/70 p-2.5 rounded-lg border border-rose-200 text-xs">
-                          <div className="text-[10px] font-bold text-rose-800 uppercase tracking-wide">
-                            Lokasi Rak Retur:
-                          </div>
-                          <div className="font-mono font-bold text-neutral-900 text-sm mt-0.5">
+                      {/* Lokasi Rak Retur jika sedang retur */}
+                      {scannedResult.foundItem && (
+                        <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs space-y-0.5">
+                          <span className="text-rose-700 font-bold text-[10px] uppercase">
+                            Slot Rak Khusus Retur:
+                          </span>
+                          <div className="font-mono font-bold text-rose-950 text-sm">
                             {scannedResult.foundItem.locationSlot}
                           </div>
-                          <div className="text-[11px] text-neutral-600 mt-1 flex items-center justify-between">
-                            <span>Status: <strong>{scannedResult.foundItem.status}</strong></span>
-                            <span>Qty: <strong>{scannedResult.foundItem.quantity} {scannedResult.foundItem.unit}</strong></span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Foto Lokasi Rak Simpan */}
+                    <div>
+                      {scannedResult.foundLocation?.photoUrl ? (
+                        <div className="space-y-1.5">
+                          <div className="text-[11px] font-bold text-neutral-700 flex items-center gap-1">
+                            <ImageIcon className="w-3.5 h-3.5 text-blue-600" />
+                            <span>Foto Fisik Rak / Lokasi Penyimpanan:</span>
+                          </div>
+                          <img
+                            src={scannedResult.foundLocation.photoUrl}
+                            alt="Foto Rak Fisik"
+                            className="w-full h-36 object-cover rounded-lg border border-neutral-300 shadow-2xs hover:scale-102 transition-transform cursor-pointer"
+                            onClick={() => {
+                              const w = window.open('');
+                              w?.document.write(
+                                `<img src="${scannedResult.foundLocation?.photoUrl}" style="max-width:100%;height:auto;margin:auto;display:block;" />`
+                              );
+                            }}
+                            title="Klik untuk memperbesar foto lokasi rak"
+                          />
+                          <div className="text-[10px] text-neutral-400 text-center">
+                            Klik foto untuk melihat ukuran penuh
                           </div>
                         </div>
                       ) : (
-                        <div className="text-xs text-neutral-500 bg-neutral-50 p-2.5 rounded-lg border border-neutral-200">
-                          <div className="font-medium text-neutral-700">Belum di Rak Retur</div>
-                          <div className="text-[11px] text-neutral-400 mt-0.5">
-                            Produk ini saat ini belum terdaftar dalam antrean retur.
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Lokasi Simpan Gudang / Toko jika ada */}
-                      {scannedResult.foundLocation && (
-                        <div className="bg-blue-50/70 p-2 rounded-lg border border-blue-200 text-[11px] space-y-0.5">
-                          <div className="font-bold text-blue-900">
-                            Lokasi Toko/Gudang:
-                          </div>
-                          <div className="text-neutral-800">
-                            Zona: {scannedResult.foundLocation.storageZone} · Rak: {scannedResult.foundLocation.aisleRack}
-                          </div>
-                          {scannedResult.foundLocation.shelfLevel && (
-                            <div className="text-neutral-600">
-                              Level: {scannedResult.foundLocation.shelfLevel}
-                            </div>
-                          )}
+                        <div className="h-full min-h-[100px] flex flex-col items-center justify-center bg-neutral-50 rounded-lg border border-dashed border-neutral-300 p-3 text-center text-xs text-neutral-400">
+                          <ImageIcon className="w-6 h-6 text-neutral-300 mb-1" />
+                          <span>Belum ada foto fisik rak lokasi simpan</span>
                         </div>
                       )}
                     </div>
                   </div>
+                </div>
 
-                  <div className="pt-2 border-t border-neutral-100 text-[10px] text-neutral-400">
-                    Posisi Rak &amp; Area Penempatan
+                {/* 3. INFORMASI RETURN BARANG JIKA MASUK DATA RETURN */}
+                <div className="bg-white p-4 rounded-xl border border-neutral-200 shadow-2xs space-y-3">
+                  <div className="flex items-center justify-between border-b border-neutral-100 pb-2">
+                    <div className="flex items-center gap-2 text-xs font-bold text-neutral-900">
+                      <Clock className="w-4 h-4 text-amber-600" />
+                      <span>3. Informasi Return Barang</span>
+                    </div>
+
+                    {scannedResult.foundItem ? (
+                      <span
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                          scannedResult.foundItem.status === 'Sudah Diambil'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : scannedResult.foundItem.status === 'Lewat Tenggat'
+                            ? 'bg-rose-100 text-rose-800'
+                            : 'bg-amber-100 text-amber-800'
+                        }`}
+                      >
+                        Status: {scannedResult.foundItem.status}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">
+                        Tidak Ada Retur Aktif
+                      </span>
+                    )}
                   </div>
+
+                  {scannedResult.foundItem ? (
+                    /* Jika Masuk Data Return */
+                    <div className="space-y-3 text-xs">
+                      {/* Overdue deadline calculation */}
+                      {(() => {
+                        const overdue = getOverdueDetail(
+                          scannedResult.foundItem.dueDate,
+                          scannedResult.foundItem.finalWarningSentAt
+                        );
+                        return (
+                          <div
+                            className={`p-2.5 rounded-lg border flex items-center justify-between ${
+                              overdue.isOverdue
+                                ? 'bg-rose-50 border-rose-200 text-rose-950 font-semibold'
+                                : 'bg-emerald-50 border-emerald-200 text-emerald-950'
+                            }`}
+                          >
+                            <span>
+                              Tenggat Waktu: <strong>{formatIndoDate(scannedResult.foundItem.dueDate)}</strong> ({overdue.exactDurationLabel})
+                            </span>
+                            <span className="font-mono text-[11px] font-bold">
+                              Qty: {scannedResult.foundItem.quantity} {scannedResult.foundItem.unit}
+                            </span>
+                          </div>
+                        );
+                      })()}
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 bg-neutral-50 p-3 rounded-lg border border-neutral-200">
+                        <div>
+                          <span className="text-neutral-500 text-[11px] block">Alasan Retur:</span>
+                          <span className="font-bold text-neutral-900">{scannedResult.foundItem.returnReason}</span>
+                        </div>
+                        <div>
+                          <span className="text-neutral-500 text-[11px] block">Tanggal Masuk Retur:</span>
+                          <span className="font-semibold text-neutral-800">{formatIndoDate(scannedResult.foundItem.receivedDate)}</span>
+                        </div>
+                        {scannedResult.foundItem.conditionNotes && (
+                          <div className="md:col-span-2">
+                            <span className="text-neutral-500 text-[11px] block">Catatan Kondisi Fisik:</span>
+                            <span className="text-neutral-700">{scannedResult.foundItem.conditionNotes}</span>
+                          </div>
+                        )}
+                        {scannedResult.foundItem.pickedUpBy && (
+                          <div className="md:col-span-2 text-emerald-800 font-semibold">
+                            ✓ Telah diambil oleh: {scannedResult.foundItem.pickedUpBy} (Tgl: {formatIndoDate(scannedResult.foundItem.pickedUpDate || '')})
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Foto Fisik Barang Retur */}
+                      {scannedResult.foundItem.photoUrl && (
+                        <div className="p-3 bg-neutral-50 rounded-lg border border-neutral-200 space-y-1.5">
+                          <div className="text-[11px] font-bold text-neutral-700 flex items-center gap-1.5">
+                            <ImageIcon className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>Foto Bukti Fisik Barang Retur:</span>
+                          </div>
+                          <img
+                            src={scannedResult.foundItem.photoUrl}
+                            alt="Foto Fisik Retur"
+                            className="max-h-36 object-contain rounded border border-neutral-300 shadow-2xs hover:scale-102 transition-transform cursor-pointer"
+                            onClick={() => {
+                              const w = window.open('');
+                              w?.document.write(
+                                `<img src="${scannedResult.foundItem?.photoUrl}" style="max-width:100%;height:auto;margin:auto;display:block;" />`
+                              );
+                            }}
+                            title="Klik untuk memperbesar foto retur"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    /* Jika TIDAK Masuk Data Return */
+                    <div className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-xl space-y-2 text-xs">
+                      <div className="flex items-center gap-2 text-emerald-900 font-bold">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        <span>Barang Ini Tidak Ada Dalam Antrean Retur Aktif</span>
+                      </div>
+                      <p className="text-neutral-600 text-[11px] leading-relaxed">
+                        Produk ini berada dalam kondisi persediaan normal dan belum pernah didaftarkan sebagai barang retur yang perlu dikembalikan ke supplier.
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -498,7 +626,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                       className="flex-1 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-2 shadow-xs cursor-pointer"
                     >
                       <MessageSquare className="w-4 h-4" />
-                      <span>Buka Detail Retur &amp; Warning Supplier</span>
+                      <span>Buka Detail Retur &amp; Peringatan WA / Serah Terima</span>
                     </button>
                     <button
                       onClick={() => {
@@ -514,11 +642,11 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                       + Tambah Retur Baru
                     </button>
                   </>
-                ) : scannedResult.foundMaster ? (
+                ) : (
                   <button
                     onClick={() => {
-                      if (onMasterProductFound) {
-                        onMasterProductFound(scannedResult.foundMaster!);
+                      if (scannedResult.foundMaster && onMasterProductFound) {
+                        onMasterProductFound(scannedResult.foundMaster);
                       } else if (onBarcodeNotFound) {
                         onBarcodeNotFound(scannedResult.code);
                       }
@@ -527,18 +655,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                     className="flex-1 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-2 shadow-xs cursor-pointer"
                   >
                     <Plus className="w-4 h-4" />
-                    <span>Daftarkan ke Halaman Retur (Autofill Produk &amp; Supplier)</span>
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => {
-                      if (onBarcodeNotFound) onBarcodeNotFound(scannedResult.code);
-                      onClose();
-                    }}
-                    className="flex-1 py-2.5 px-4 bg-neutral-900 hover:bg-neutral-800 text-white rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>Input Barang Ini Sebagai Retur Baru</span>
+                    <span>Daftarkan Barang Ini ke Formulir Retur Masuk</span>
                   </button>
                 )}
               </div>

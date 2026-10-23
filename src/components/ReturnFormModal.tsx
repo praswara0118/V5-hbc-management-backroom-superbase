@@ -128,7 +128,18 @@ export const ReturnFormModal: React.FC<ReturnFormModalProps> = ({
   const [isCameraActive, setIsCameraActive] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const galleryInputRef = useRef<HTMLInputElement | null>(null);
+  const nativeCameraInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Sync video stream when isCameraActive turns true
+  useEffect(() => {
+    if (isCameraActive && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+      videoRef.current.play().catch((err) => {
+        console.warn('Video play error:', err);
+      });
+    }
+  }, [isCameraActive]);
 
   // Master product autofill state
   const [matchedMaster, setMatchedMaster] = useState<MasterProduct | null>(null);
@@ -193,17 +204,21 @@ export const ReturnFormModal: React.FC<ReturnFormModalProps> = ({
     try {
       stopLiveCamera();
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
       });
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
-      }
       setIsCameraActive(true);
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().catch(() => {});
+        }
+      }, 50);
     } catch (err) {
-      console.warn('Gagal membuka kamera langsung:', err);
-      alert('Tidak dapat mengakses kamera perangkat. Anda dapat menggunakan opsi Unggah Foto.');
+      console.warn('Gagal membuka kamera langsung, membuka kamera perangkat bawaan:', err);
+      // Fallback ke kamera bawaan perangkat
+      nativeCameraInputRef.current?.click();
     }
   };
 
@@ -231,7 +246,8 @@ export const ReturnFormModal: React.FC<ReturnFormModalProps> = ({
     } catch (err) {
       console.warn('Gagal memproses foto:', err);
     } finally {
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (galleryInputRef.current) galleryInputRef.current.value = '';
+      if (nativeCameraInputRef.current) nativeCameraInputRef.current.value = '';
     }
   };
 
@@ -1164,12 +1180,21 @@ export const ReturnFormModal: React.FC<ReturnFormModalProps> = ({
               )}
             </div>
 
-            {/* Hidden native file input */}
+            {/* Native camera file input (Forces camera app on mobile, no black screen) */}
             <input
-              ref={fileInputRef}
+              ref={nativeCameraInputRef}
               type="file"
               accept="image/*"
               capture="environment"
+              onChange={handleFileUpload}
+              className="hidden"
+            />
+
+            {/* Pure gallery file input (NO capture attribute - Opens photo album/files) */}
+            <input
+              ref={galleryInputRef}
+              type="file"
+              accept="image/*"
               onChange={handleFileUpload}
               className="hidden"
             />
@@ -1218,19 +1243,19 @@ export const ReturnFormModal: React.FC<ReturnFormModalProps> = ({
                     <span>Foto Bukti Fisik Siap Disimpan</span>
                   </div>
                   <p className="text-[11px] text-neutral-500">
-                    Foto telah dikompres secara optimal dan akan tersimpan di Cloud Firestore.
+                    Foto telah dikompres secara optimal dan akan tersimpan di Cloud Firestore &amp; Database.
                   </p>
                   <div className="flex items-center gap-2 pt-1">
                     <button
                       type="button"
-                      onClick={startLiveCamera}
+                      onClick={() => nativeCameraInputRef.current?.click()}
                       className="text-xs text-neutral-700 hover:text-neutral-900 border border-neutral-300 px-2 py-1 rounded bg-neutral-50 cursor-pointer"
                     >
                       Ambil Ulang (Kamera)
                     </button>
                     <button
                       type="button"
-                      onClick={() => fileInputRef.current?.click()}
+                      onClick={() => galleryInputRef.current?.click()}
                       className="text-xs text-neutral-700 hover:text-neutral-900 border border-neutral-300 px-2 py-1 rounded bg-neutral-50 cursor-pointer"
                     >
                       Pilih dari Galeri
@@ -1243,19 +1268,22 @@ export const ReturnFormModal: React.FC<ReturnFormModalProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <button
                   type="button"
-                  onClick={startLiveCamera}
-                  className="p-3 bg-white hover:bg-neutral-50 border border-dashed border-neutral-300 hover:border-neutral-400 rounded-lg flex items-center justify-center gap-2 text-xs font-semibold text-neutral-700 transition-colors cursor-pointer"
+                  onClick={() => {
+                    // Try native camera first for instant mobile camera; user can also choose viewfinder
+                    nativeCameraInputRef.current?.click();
+                  }}
+                  className="p-3 bg-white hover:bg-neutral-50 border border-dashed border-emerald-300 hover:border-emerald-500 rounded-lg flex items-center justify-center gap-2 text-xs font-semibold text-emerald-800 transition-colors cursor-pointer"
                 >
                   <Camera className="w-4 h-4 text-emerald-600" />
-                  <span>Ambil Foto Langsung (Kamera)</span>
+                  <span>Ambil Foto Langsung (Kamera HP)</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={() => galleryInputRef.current?.click()}
                   className="p-3 bg-white hover:bg-neutral-50 border border-dashed border-neutral-300 hover:border-neutral-400 rounded-lg flex items-center justify-center gap-2 text-xs font-semibold text-neutral-700 transition-colors cursor-pointer"
                 >
                   <Upload className="w-4 h-4 text-neutral-600" />
-                  <span>Unggah dari File / Galeri</span>
+                  <span>Unggah dari File / Galeri Foto</span>
                 </button>
               </div>
             )}

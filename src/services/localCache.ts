@@ -128,3 +128,17 @@ function getFromLocalStorage<T>(key: string): T | null {
   } catch {}
   return null;
 }
+
+export function savePickupInfoLocally(itemId: string, info: any): void {
+  try {
+    localStorage.setItem(`returku_pickup_${itemId}`, JSON.stringify(info));
+  } catch {}
+}
+
+export function getLocalPickupInfo(itemId: string): any | null {
+  try {
+    const raw = localStorage.getItem(`returku_pickup_${itemId}`);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return null;
+}

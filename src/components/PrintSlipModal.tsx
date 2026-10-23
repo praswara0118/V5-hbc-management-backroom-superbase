@@ -141,13 +141,34 @@ export const PrintSlipModal: React.FC<PrintSlipModalProps> = ({ isOpen, onClose,
           {item.photoUrl && (
             <div className="border border-neutral-300 p-2 rounded bg-neutral-50">
               <div className="text-[10px] font-bold uppercase text-neutral-600 mb-1">
-                Lampiran Bukti Foto Fisik Barang:
+                Lampiran Bukti Foto Fisik Barang Retur:
               </div>
               <img
                 src={item.photoUrl}
                 alt="Foto Bukti Fisik"
                 className="max-h-36 object-contain rounded border border-neutral-200"
               />
+            </div>
+          )}
+
+          {item.pickupInfo?.photoUrl && (
+            <div className="border border-neutral-300 p-2 rounded bg-emerald-50">
+              <div className="text-[10px] font-bold uppercase text-emerald-800 mb-1">
+                Lampiran Bukti Foto Serah Terima / Pengambilan:
+              </div>
+              <div className="flex items-center gap-3">
+                <img
+                  src={item.pickupInfo.photoUrl}
+                  alt="Bukti Pengambilan"
+                  className="max-h-32 object-contain rounded border border-emerald-300"
+                />
+                <div className="text-[11px] text-neutral-700 space-y-0.5">
+                  <div>Penerima: <strong>{item.pickupInfo.receiverName}</strong></div>
+                  {item.pickupInfo.receiverPhone && <div>Kontak: {item.pickupInfo.receiverPhone}</div>}
+                  {item.pickupInfo.documentNo && <div>No. Dokumen: {item.pickupInfo.documentNo}</div>}
+                  {item.pickupInfo.notes && <div>Catatan: {item.pickupInfo.notes}</div>}
+                </div>
+              </div>
             </div>
           )}
 

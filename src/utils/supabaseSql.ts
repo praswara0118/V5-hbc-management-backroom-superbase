@@ -167,11 +167,14 @@ CREATE TABLE IF NOT EXISTS return_items (
     estimated_value NUMERIC DEFAULT 0,
     picked_up_date TEXT DEFAULT NULL,
     picked_up_by TEXT DEFAULT NULL,
+    pickup_info JSONB DEFAULT NULL,
     warning_history JSONB NOT NULL DEFAULT '[]'::jsonb,
     photo_url TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
+
+ALTER TABLE IF EXISTS public.return_items ADD COLUMN IF NOT EXISTS pickup_info JSONB;
 
 -- Indexing return_items
 CREATE INDEX IF NOT EXISTS idx_return_items_barcode ON return_items(barcode);

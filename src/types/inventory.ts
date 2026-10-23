@@ -76,6 +76,15 @@ export interface StorageLocation {
   updatedAt: string;
 }
 
+export interface PickupInfo {
+  receiverName: string;
+  receiverPhone?: string;
+  documentNo?: string;
+  photoUrl?: string; // Foto bukti serah terima / driver / surat jalan
+  notes?: string;
+  timestamp: string;
+}
+
 export interface ReturnItem {
   id: string;
   barcode: string;
@@ -98,6 +107,7 @@ export interface ReturnItem {
   estimatedValue?: number; // Nilai taksiran barang (Rp)
   pickedUpDate?: string;
   pickedUpBy?: string;
+  pickupInfo?: PickupInfo;
   warningHistory: WarningLog[];
   photoUrl?: string;
   finalWarningSentAt?: string; // Timestamp batas waktu 2x24 jam peringatan terakhir
